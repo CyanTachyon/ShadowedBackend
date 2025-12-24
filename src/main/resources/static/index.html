@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="dark">
+<html lang="zh-CN">
 
 <head>
     <meta charset="UTF-8">
@@ -43,7 +43,7 @@
                     <div class="header-left" style="position: relative;">
                         <!-- User Avatar & Menu -->
                         <div class="avatar-container" onclick="toggleUserMenu()" title="User Menu">
-                            <img id="current-user-avatar" class="user-avatar" src="" alt="Avatar">
+                            <img id="current-user-avatar" class="user-avatar" src="" alt="Avatar" loading="lazy">
                             <span id="current-user-name" style="margin-left: 10px; font-weight: 500;">User</span>
                         </div>
                         <div id="user-menu" class="dropdown-menu">
@@ -90,15 +90,15 @@
                     </div>
                 </div>
                 <div class="input-area">
-                    <label for="message-input"></label><input type="text" id="message-input"  placeholder="Type a message..." disabled onkeypress="handleKeyPress(event)" autocomplete="off">
-                    <button class="button" onclick="sendImage()" style="width: 30px; height: 30px; margin-top: 0; display: flex; align-items: center; justify-content: center; padding: 0;" id="media-btn">
+                    <label for="message-in"></label><textarea id="message-in" placeholder="Type a message..." disabled onkeypress="handleKeyPress(event)" autocomplete="off"></textarea>
+                    <button class="button" onclick="sendImage()" style="width: 30px; height: 30px; margin-top: auto; display: flex; align-items: center; justify-content: center; padding: 0;" id="media-btn">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" xmlns="http://www.w3.org/2000/svg">
                             <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
                             <circle cx="8.5" cy="8.5" r="1.5"/>
                             <polyline points="21 15 16 10 5 21"/>
                         </svg>
                     </button>
-                    <button class="button" onclick="sendMessage()" style="width: auto; height: 30px; margin-top: 0;" id="send-message-btn">Send</button>
+                    <button class="button" onclick="sendMessage()" style="width: auto; height: 30px; margin-top: auto;" id="send-message-btn">Send</button>
                 </div>
             </div>
         </div>
@@ -142,7 +142,7 @@
     <div id="kick-member-modal" class="modal">
         <div class="modal-content">
             <h3 style="margin: auto;">Kick Member</h3>
-            <img id="kick-member-avatar" class="user-avatar" src="" alt="Avatar" style="width: 60px; height: 60px; margin: 10px auto;">
+            <img id="kick-member-avatar" class="user-avatar" src="" alt="Avatar" style="width: 60px; height: 60px; margin: 10px auto;" loading="lazy">
             <div id="kick-member-name" style="font-weight: 500; margin: auto auto 10px;">Member Name</div>
             <div style="margin-bottom: 15px;" id="kick-member-msg"></div>
             <button class="button" onclick="" style="background-color: #f85149; color: white; border: 1px solid var(--border-color); margin-top: 5px;" id="confirm-kick-btn">Confirm</button>

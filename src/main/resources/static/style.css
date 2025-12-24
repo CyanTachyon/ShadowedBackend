@@ -178,6 +178,7 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    height: 42px;
 }
 
 .messages {
@@ -219,7 +220,7 @@ body {
     gap: 0.5rem;
 }
 
-.input-area #message-input {
+.input-area #message-in {
     flex: 1;
     padding: 0.5rem;
     border-radius: 4px;
@@ -227,6 +228,7 @@ body {
     background-color: var(--input-bg);
     color: var(--text-color);
     resize: none;
+    font-family: unset;
 }
 
 @keyframes fadeIn {

@@ -127,12 +127,12 @@ async function handlePacket(data)
                     const badge = chatDiv.querySelector('.unread-badge');
                     if (unreadCount > 0)
                     {
-                        if (badge) badge.innerText = unreadCount;
+                        if (badge) badge.innerText = unreadCount > 99 ? '…' : unreadCount;
                         else
                         {
                             const newBadge = document.createElement('div');
                             newBadge.className = 'unread-badge';
-                            newBadge.innerText = unreadCount;
+                            newBadge.innerText = unreadCount > 99 ? '…' : unreadCount;
                             chatDiv.querySelector('.unread-parent').appendChild(newBadge);
                         }
                     }
@@ -246,7 +246,7 @@ async function handleChatsList(chats)
     {
         let unreadBadgeHtml = '';
         if (chat.unreadCount && chat.unreadCount > 0)
-            unreadBadgeHtml = `<div class="unread-badge">${chat.unreadCount}</div>`;
+            unreadBadgeHtml = `<div class="unread-badge">${chat.unreadCount > 99 ? '…' : chat.unreadCount}</div>`;
 
         if (!chatKeys[chat.chatId])
         {
@@ -279,7 +279,7 @@ async function handleChatsList(chats)
 
                 iconHtml = `
                     <div style="position: relative; margin-right: 12px; width: 40px; height: 40px;" class="unread-parent">
-                        <img class="user-avatar" style="width: 100%; height: 100%; border-radius: 50%; margin: 0;" src="${avatarUrl}" alt="avatar">
+                        <img class="user-avatar" style="width: 100%; height: 100%; border-radius: 50%; margin: 0;" src="${avatarUrl}" alt="avatar" loading="lazy">
                         <div class="chat-icon" style="background: var(--primary-color); color: white; border-radius: 50%; font-size: 1.2rem; display: none; margin: 0; width: 100%; height: 100%; flex: 1; align-items: center; justify-content: center;">${initial}</div>
                         ${unreadBadgeHtml}
                     </div>`;
@@ -330,14 +330,14 @@ function selectChat(chat)
         if (otherId)
         {
             const avatarUrl = fetchAvatarUrl(otherId);
-            avatarHtml = `<img src="${avatarUrl}" style="width: 28px; height: 28px; border-radius: 50%; margin-right: 8px; vertical-align: middle; object-fit: cover;" alt="avatar">`;
+            avatarHtml = `<img src="${avatarUrl}" style="width: 28px; height: 28px; border-radius: 50%; margin-right: 8px; vertical-align: middle; object-fit: cover;" alt="avatar" loading="lazy">`;
         }
     }
 
     chatWithEl.innerHTML = `<div style="display: flex; align-items: center;">${avatarHtml}<span>${displayName}</span></div>`;
     document.getElementById('chat-settings-toggle').style.display = 'block';
-    document.getElementById('message-input').disabled = false;
-    document.getElementById('message-input').value = '';
+    document.getElementById('message-in').disabled = false;
+    document.getElementById('message-in').value = '';
 
     // 更新active状态
     const items = document.querySelectorAll('.friend-item');
@@ -509,6 +509,7 @@ async function createMessageElement(msg)
             avatarImg.style.top = '0';
             avatarImg.style.left = '-40px';
             avatarImg.src = avatarUrl;
+            avatarImg.loading = 'lazy';
             div.appendChild(avatarImg);
 
             div.style.marginLeft = '40px';
@@ -541,7 +542,7 @@ async function createMessageElement(msg)
                 canvas.height = height;
                 const placeholderUrl = canvas.toDataURL('image/png');
                 contentDiv.innerHTML = `
-                    <img src="${placeholderUrl}" style="max-width: 100%; max-height: 300px; opacity: 0" alt=""/>
+                    <img src="${placeholderUrl}" style="max-width: 100%; max-height: 300px; opacity: 0" alt="" loading="eager"/>
                 `;
             }
             else contentDiv.innerText = "[Loading image...]";
@@ -632,7 +633,6 @@ function createGroupModal()
 {
     document.getElementById('create-group-modal').style.display = 'flex';
     document.getElementById('group-members-list').innerHTML = '<div style="padding: 10px; text-align: center; color: var(--secondary-color);" id="placeholder">Loading friends...</div>';
-    document
     socket.send("get_friends");
 }
 
@@ -678,7 +678,7 @@ function renderFriendsForSelection(friends)
                 closeGroupModal();
             };
             div.innerHTML = `
-                <img src="${fetchAvatarUrl(friend.id)}" class="avatar" style="width:24px; height:24px; background:var(--border-color); border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-size:12px; margin-right:8px;" alt="avatar"/> 
+                <img loading="lazy" src="${fetchAvatarUrl(friend.id)}" class="avatar" style="width:24px; height:24px; background:var(--border-color); border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-size:12px; margin-right:8px;" alt="avatar"/> 
                 <span>${friend.username}</span>
             `;
         }
@@ -695,7 +695,7 @@ function renderFriendsForSelection(friends)
             };
             div.innerHTML = `
                 <input type="checkbox" data-username="${friend.username}" data-id="${friend.id}">
-                <img src="${fetchAvatarUrl(friend.id)}" class="avatar" style="width:24px; height:24px; background:var(--border-color); border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-size:12px; margin-right:8px;" alt="avatar"/>
+                <img loading="lazy" src="${fetchAvatarUrl(friend.id)}" class="avatar" style="width:24px; height:24px; background:var(--border-color); border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-size:12px; margin-right:8px;" alt="avatar"/>
                 <span>${friend.username}</span>
             `;
         }
@@ -912,12 +912,15 @@ function renderChatSettings(details)
         memberNameSpan.onclick = () => startPrivateChat(m.username);
         memberItemDiv.appendChild(memberNameSpan);
 
-        const kickBtn = document.createElement('button');
-        kickBtn.className = 'kick-member-btn';
-        kickBtn.innerText = 'kick';
-        kickBtn.style.display = (isOwner && m.id !== myId) ? 'inline-block' : 'none';
-        kickBtn.onclick = (e) => openKickMemberModal(chat, m);
-        memberItemDiv.appendChild(kickBtn);
+        if (!isPrivate)
+        {
+            const kickBtn = document.createElement('button');
+            kickBtn.className = 'kick-member-btn';
+            kickBtn.innerText = 'kick';
+            kickBtn.style.display = (isOwner && m.id !== myId) ? 'inline-block' : 'none';
+            kickBtn.onclick = (e) => openKickMemberModal(chat, m);
+            memberItemDiv.appendChild(kickBtn);
+        }
 
         memberListDiv.appendChild(memberItemDiv);
     });
@@ -941,7 +944,6 @@ async function updateChatName()
 function startPrivateChat(username)
 {
     if (username === currentUser.username) return;
-    document.getElementById('chat-settings-panel').style.display = 'none';
     document.getElementById('add-friend-username').value = username;
     addFriend();
 }
@@ -970,7 +972,7 @@ async function fetchPublicKeyByUsername(username)
 
 async function sendMessage()
 {
-    const input = document.getElementById('message-input');
+    const input = document.getElementById('message-in');
     const text = input.value.trim();
     if (!text || !currentChatId) return;
 
@@ -1093,13 +1095,18 @@ function toggleTheme()
     const current = html.getAttribute('data-theme');
     const next = current === 'dark' ? 'light' : 'dark';
     html.setAttribute('data-theme', next);
+    localStorage.setItem('theme', next);
 }
+document.documentElement.setAttribute('data-theme', localStorage.getItem('theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
 
-function handleKeyPress(e)
+async function handleKeyPress(e)
 {
     if (e.key === 'Enter')
         if (isMobileDevice() === e.shiftKey)
-            sendMessage();
+        {
+            e.preventDefault();
+            await sendMessage();
+        }
 }
 
 const logout = () => window.location.reload();
@@ -1178,6 +1185,15 @@ function showResetPasswordModal()
     if (!modal)
         return showToast("Reset password modal not found!", "error");
     modal.style.display = 'flex';
+    modal.innerHTML = `
+        <div class="modal-content">
+            <h3>Reset Password</h3>
+            <label for="reset-password"></label><input type="password" id="reset-password" placeholder="New Password" style="width: 100%; padding: 8px; box-sizing: border-box; margin-bottom: 10px; background: var(--input-bg); border: 1px solid var(--border-color); color: var(--text-color); border-radius: 4px;">
+            <label for="reset-password-confirm"></label><input type="password" id="reset-password-confirm" placeholder="Confirm New Password" style="width: 100%; padding: 8px; box-sizing: border-box; margin-bottom: 10px; background: var(--input-bg); border: 1px solid var(--border-color); color: var(--text-color); border-radius: 4px;">
+            <button class="button" onclick="resetPassword()">Reset Password</button>
+            <button class="button" onclick="closeResetPasswordModal()" style="background-color: transparent; color: var(--text-color); border: 1px solid var(--border-color); margin-top: 5px;">Cancel</button>
+        </div>
+    `;
 }
 
 async function resetPassword()

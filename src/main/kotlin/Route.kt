@@ -1,7 +1,6 @@
 package moe.tachyon.shadowed
 
 import at.favre.lib.crypto.bcrypt.BCrypt
-import io.ktor.client.request.request
 import io.ktor.http.*
 import io.ktor.http.content.*
 import io.ktor.server.application.*
@@ -15,18 +14,16 @@ import io.ktor.utils.io.core.*
 import io.ktor.websocket.*
 import kotlinx.coroutines.flow.consumeAsFlow
 import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.datetime.Clock
 import kotlinx.io.asSource
 import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
-import moe.tachyon.shadowed.dataClass.Chat
-import moe.tachyon.shadowed.dataClass.ChatId
+import moe.tachyon.shadowed.dataClass.*
 import moe.tachyon.shadowed.dataClass.ChatId.Companion.toChatId
-import moe.tachyon.shadowed.dataClass.MessageType
-import moe.tachyon.shadowed.dataClass.User
-import moe.tachyon.shadowed.dataClass.UserId
 import moe.tachyon.shadowed.database.*
 import moe.tachyon.shadowed.logger.ShadowedLogger
 import moe.tachyon.shadowed.utils.FileUtils
@@ -34,7 +31,8 @@ import org.koin.core.component.KoinComponent
 import java.io.ByteArrayInputStream
 import javax.imageio.ImageIO
 
-private val sessions = java.util.concurrent.ConcurrentHashMap<UserId, DefaultWebSocketServerSession>()
+private val sessions = mutableMapOf<UserId, MutableSet<DefaultWebSocketServerSession>>()
+private val sessionsMutex = Mutex()
 private const val SERVER_AUTH_KEY = "shadowed_auth_key_v1"
 
 private fun getKoin() = object : KoinComponent { }.getKoin()
@@ -402,7 +400,10 @@ private fun Route.webSocket() = webSocket("/socket") socket@
                     )
                 }
                 loginUser = user
-                sessions[user.id] = this@socket
+                sessionsMutex.withLock()
+                {
+                    sessions.getOrPut(user.id) { mutableSetOf() }.add(this)
+                }
 
                 val response = buildJsonObject()
                 {
@@ -535,8 +536,10 @@ private fun Route.webSocket() = webSocket("/socket") socket@
                     put("message", if (isExisting) "Opening existing chat" else "Friend added & Chat created")
                 }
                 send(contentNegotiationJson.encodeToString(response))
-                if (sessions.containsKey(targetUser.id))
-                    sessions[targetUser.id]?.sendChatList(targetUser.id)
+                for (s in sessionsMutex.withLock { sessions[targetUser.id]?.toList() ?: emptyList() }) runCatching()
+                {
+                    s.sendChatList(targetUser.id)
+                }
             }
 
             if (packetName.equals("create_group", ignoreCase = true))
@@ -612,10 +615,12 @@ private fun Route.webSocket() = webSocket("/socket") socket@
                         )
                     )
                 )
-                memberUsers.forEach()
-                { user ->
-                    runCatching { sessions[user.id]?.sendChatList(user.id) }
-                }
+                for (user in memberUsers)
+                    for (s in sessionsMutex.withLock { sessions[user.id]?.toList() ?: emptyList() })
+                        runCatching()
+                        {
+                            s.sendChatList(user.id)
+                        }
             }
 
             if (packetName.equals("send_message", ignoreCase = true))
@@ -828,9 +833,14 @@ private fun Route.webSocket() = webSocket("/socket") socket@
 
                 val members = chatMembers.getChatMembersDetailed(chatId)
                 val chat = getKoin().get<Chats>().getChat(chatId)!!
-                members.forEach()
+                for (user in members)
+                    for (s in sessionsMutex.withLock { sessions[user.id]?.toList() ?: emptyList() }) runCatching()
+                    {
+                        s.sendChatDetails(chat, members)
+                    }
+                for (s in sessionsMutex.withLock { sessions[targetUser.id]?.toList() ?: emptyList() }) runCatching()
                 {
-                    runCatching { sessions[it.id]?.sendChatDetails(chat, members) }
+                    s.sendChatList(targetUser.id)
                 }
             }
 
@@ -879,19 +889,30 @@ private fun Route.webSocket() = webSocket("/socket") socket@
                     )
                 )
                 val chat = chats.getChat(chatId)!!
-                members.forEach()
+                for (user in members)
                 {
-                    runCatching { sessions[it.id]?.sendChatDetails(chat, members) }
+                    for (s in sessionsMutex.withLock { sessions[user.id]?.toList() ?: emptyList() }) runCatching()
+                    {
+                        s.sendChatDetails(chat, members)
+                    }
                 }
-                runCatching { sessions[targetUser.id]?.sendChatList(targetUser.id) }
+                for (s in sessionsMutex.withLock { sessions[targetUser.id]?.toList() ?: emptyList() }) runCatching()
+                {
+                    s.sendChatList(targetUser.id)
+                }
             }
         }
     }
     finally
     {
         loginUser?.let()
-        { 
-            sessions.remove(it.id) 
+        {
+            sessionsMutex.withLock()
+            {
+                val set = sessions[it.id] ?: return@withLock
+                set.remove(this)
+                if (set.isEmpty()) sessions.remove(it.id)
+            }
         }
     }
 }
@@ -935,8 +956,7 @@ private suspend fun distributeMessage(
     val members = getKoin().get<ChatMembers>().getMemberIds(chatId)
     members.forEach()
     { uid ->
-        val s = sessions[uid]
-        if (s != null)
+        for (s in sessionsMutex.withLock { sessions[uid]?.toList() ?: emptyList() })
         {
             s.sendUnreadCount(uid, chatId)
             val pushData = buildJsonObject()
