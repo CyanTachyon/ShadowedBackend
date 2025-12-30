@@ -8,5 +8,6 @@ data class Chat(
     val name: String?,
     val owner: UserId,
     val private: Boolean,
+    val isMoment: Boolean = false,
     val lastChatAt: kotlinx.datetime.Instant,
 )

@@ -28,4 +28,6 @@ database:
 
     # 数据库懒惰初始化
     lazyInit: true
+
+# 最大图片大小, 单位: 字节
 maxImageSize: 10485760 # 10MB

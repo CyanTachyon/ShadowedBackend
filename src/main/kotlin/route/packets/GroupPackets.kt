@@ -97,9 +97,17 @@ object AddMemberToChatHandler : PacketHandler
         }.getOrNull() ?: return session.sendError("Invalid packet format")
 
         val chatId = ChatId(chatIdVal)
+        val chats = getKoin().get<Chats>()
+        val chatMembers = getKoin().get<ChatMembers>()
+        
+        // Check if this is a moment chat - only owner can invite
+        val chat = chats.getChat(chatId) ?: return session.sendError("Chat not found")
+        if (chat.isMoment && chat.owner != loginUser.id)
+        {
+            return session.sendError("Only the owner can invite viewers to their moments")
+        }
         
         // Verify current user is a member of this chat
-        val chatMembers = getKoin().get<ChatMembers>()
         val isMember = chatMembers.getUserChats(loginUser.id).any { it.chatId == chatId }
         
         if (!isMember) return session.sendError("You are not a member of this chat")
@@ -117,7 +125,6 @@ object AddMemberToChatHandler : PacketHandler
         session.sendInfo("Member added successfully")
 
         val members = chatMembers.getChatMembersDetailed(chatId)
-        val chat = getKoin().get<Chats>().getChat(chatId)!!
         
         for (user in members)
             SessionManager.forEachSession(user.id) { s -> s.sendChatDetails(chat, members) }
@@ -146,6 +153,12 @@ object KickMemberFromChatHandler : PacketHandler
         val chats = getKoin().get<Chats>()
         val chatMembers = getKoin().get<ChatMembers>()
         val chat = chats.getChat(chatId) ?: return session.sendError("Chat not found")
+
+        // Check if this is a moment chat - only owner can kick
+        if (chat.isMoment && chat.owner != loginUser.id)
+        {
+            return session.sendError("Only the owner can remove viewers from their moments")
+        }
 
         val isOwner = chats.isChatOwner(chatId, loginUser.id)
 

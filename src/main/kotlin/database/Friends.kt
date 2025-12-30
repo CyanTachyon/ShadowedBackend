@@ -29,6 +29,7 @@ class Friends: SqlDao<Friends.FriendTable>(FriendTable)
             onDelete = ReferenceOption.CASCADE,
             onUpdate = ReferenceOption.CASCADE
         ).index()
+        // reference to chat is enough; moment viewer membership is stored in ChatMembers
         override val primaryKey: PrimaryKey = PrimaryKey(userA, userB)
 
         init
@@ -93,4 +94,17 @@ class Friends: SqlDao<Friends.FriendTable>(FriendTable)
 
         (queryA + queryB).distinctBy { it.first }
     }
+
+    // ====== Friendship helpers ======
+    /**
+     * Check if the friendship exists between two users
+     */
+    suspend fun areFriends(userAId: UserId, userBId: UserId): Boolean = query()
+    {
+        val a = minOf(userAId, userBId)
+        val b = maxOf(userAId, userBId)
+        table.selectAll().where { (table.userA eq a) and (table.userB eq b) }.any()
+    }
+
+    // Note: moment viewer permissions are determined by membership in the owner's moment chat
 }

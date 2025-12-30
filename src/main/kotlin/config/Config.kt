@@ -42,13 +42,14 @@ class ConfigLoader<T: Any> private constructor(
      */
     private fun setValue0(value: T)
     {
-        listeners.forEach {
+        config = value
+        listeners.forEach()
+        {
             logger.warning("Error in config listener")
             {
                 it(config, value)
             }
         }
-        config = value
         logger.config("Config $filename changed to $value")
     }
 
@@ -106,14 +107,10 @@ class ConfigLoader<T: Any> private constructor(
         )
         fun init() // 初始化所有配置
         {
-            listOf(loggerConfig)
+            listOf(loggerConfig, weeklySummaryConfig)
             reloadAll()
         }
 
-        /**
-         * [WeakReference] 采用弱引用, 避免不被回收
-         * @author nullaqua
-         */
         private val configMap: MutableMap<String, ConfigLoader<*>> =
             ConcurrentHashMap()
 

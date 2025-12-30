@@ -83,7 +83,27 @@ object SendMessageHandler: PacketHandler
             contentNegotiationJson.decodeFromString<SendMessage>(packetData)
         }.getOrNull() ?: return session.sendError("Send message failed: Invalid packet format")
 
-        if (getKoin().get<ChatMembers>().getUserChats(loginUser.id).none { it.chatId == chatId })
+        val chats = getKoin().get<Chats>()
+        val chatMembers = getKoin().get<ChatMembers>()
+
+        // Check if this is a moment chat - only owner can send messages
+        val chat = chats.getChat(chatId)
+        if (chat != null && chat.isMoment && chat.owner != loginUser.id)
+        {
+            return session.sendError("Send message failed: Only the owner can post to their moments")
+        }
+
+        // For moment chats, check membership differently (moment chats are excluded from getUserChats)
+        val isMember = if (chat?.isMoment == true)
+        {
+            chatMembers.isMember(chatId, loginUser.id)
+        }
+        else
+        {
+            chatMembers.getUserChats(loginUser.id).any { it.chatId == chatId }
+        }
+
+        if (!isMember)
             return session.sendError("Send message failed: You are not a member of this chat")
 
         val messages = getKoin().get<Messages>()
@@ -93,9 +113,9 @@ object SendMessageHandler: PacketHandler
             chatId = chatId,
             senderId = loginUser.id
         )
-        getKoin().get<Chats>().updateTime(chatId)
-        getKoin().get<ChatMembers>().incrementUnread(chatId, loginUser.id)
-        getKoin().get<ChatMembers>().resetUnread(chatId, loginUser.id)
+        chats.updateTime(chatId)
+        chatMembers.incrementUnread(chatId, loginUser.id)
+        chatMembers.resetUnread(chatId, loginUser.id)
         distributeMessage(
             Message(
                 id = msgId,

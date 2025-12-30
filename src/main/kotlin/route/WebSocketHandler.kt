@@ -30,6 +30,13 @@ private val packetHandlers: Map<String, PacketHandler> = listOf(
     // Broadcast packets
     SendBroadcastHandler,
     GetBroadcastsHandler,
+    // Moment packets
+    GetMomentsHandler,
+    PostMomentHandler,
+    GetUserMomentsHandler,
+    ToggleMomentPermissionHandler,
+    GetMomentPermissionHandler,
+    GetMyMomentKeyHandler,
     // Login packets (except login itself)
     GetPublicKeyByUsernameHandler,
     UpdateSignatureHandler,

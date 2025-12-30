@@ -1,20 +1,16 @@
 package moe.tachyon.shadowed.database
 
 import kotlinx.datetime.Clock
+import kotlinx.datetime.Instant
 import moe.tachyon.shadowed.dataClass.ChatId
 import moe.tachyon.shadowed.dataClass.Message
 import moe.tachyon.shadowed.dataClass.MessageType
 import moe.tachyon.shadowed.dataClass.UserId
 import moe.tachyon.shadowed.database.utils.singleOrNull
 import org.jetbrains.exposed.dao.id.LongIdTable
-import org.jetbrains.exposed.sql.ReferenceOption
-import org.jetbrains.exposed.sql.SortOrder
+import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
-import org.jetbrains.exposed.sql.deleteWhere
-import org.jetbrains.exposed.sql.insertAndGetId
 import org.jetbrains.exposed.sql.kotlin.datetime.timestamp
-import org.jetbrains.exposed.sql.selectAll
-import org.jetbrains.exposed.sql.update
 
 class Messages: SqlDao<Messages.MessageTable>(MessageTable)
 {
@@ -104,6 +100,85 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
                     time = it[table.time].toEpochMilliseconds(),
                     isRead = it[table.isRead],
                 )
+            }
+    }
+
+    /**
+     * Data class for moment messages with owner info and decryption key
+     */
+    data class MomentMessage(
+        val messageId: Long,
+        val content: String,
+        val type: MessageType,
+        val ownerId: Int,
+        val ownerName: String,
+        val time: Long,
+        val key: String,
+    )
+
+    /**
+     * Get all moment messages visible to a user using JOIN query
+     * Joins chat_members -> chats (where is_moment=true) -> messages -> users (owner)
+     */
+    suspend fun getMomentMessagesForUser(
+        userId: UserId,
+        offset: Long,
+        count: Int
+    ): List<MomentMessage> = query()
+    {
+        val chatsTable = getKoin().get<Chats>().table
+        val chatMembersTable = getKoin().get<ChatMembers>().table
+        val usersTable = getKoin().get<Users>().table
+
+        chatMembersTable
+            .innerJoin(chatsTable, { chatMembersTable.chat }, { chatsTable.id })
+            .innerJoin(table, { chatsTable.id }, { table.chat })
+            .innerJoin(usersTable, { chatsTable.owner }, { usersTable.id })
+            .selectAll()
+            .where { (chatMembersTable.user eq userId) and (chatsTable.isMoment eq true) }
+            .orderBy(table.time to SortOrder.DESC)
+            .limit(count)
+            .offset(start = offset)
+            .map {
+                MomentMessage(
+                    messageId = it[table.id].value,
+                    content = it[table.content],
+                    type = it[table.type],
+                    ownerId = it[chatsTable.owner].value.value,
+                    ownerName = it[usersTable.username],
+                    time = it[table.time].toEpochMilliseconds(),
+                    key = it[chatMembersTable.key],
+                )
+            }
+    }
+
+    suspend fun getTopActiveUsers(after: Instant): List<Pair<String, Long>> = query()
+    {
+        val userTable = getKoin().get<Users>().table
+        userTable.join(table, JoinType.INNER, userTable.id, table.sender)
+            .select(table.id.count(), userTable.username)
+            .where { table.time greater after }
+            .groupBy(table.sender, userTable.username)
+            .orderBy(table.id.count(), SortOrder.DESC)
+            .limit(10)
+            .map()
+            {
+                it[userTable.username] to it[table.id.count()]
+            }
+    }
+
+    suspend fun getTopActiveChats(after: Instant): List<Pair<String, Long>> = query()
+    {
+        val chatTable = getKoin().get<Chats>().table
+        chatTable.join(table, JoinType.INNER, chatTable.id, table.chat)
+            .select(table.id.count(), chatTable.name)
+            .where { (table.time greater after) and (chatTable.private eq false) }
+            .groupBy(table.chat, chatTable.name)
+            .orderBy(table.id.count(), SortOrder.DESC)
+            .limit(10)
+            .map()
+            {
+                it[chatTable.name] to it[table.id.count()]
             }
     }
 }

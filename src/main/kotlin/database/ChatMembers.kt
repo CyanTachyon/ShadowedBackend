@@ -58,9 +58,14 @@ class ChatMembers: SqlDao<ChatMembers.ChatMemberTable>(ChatMemberTable)
     {
         val myMemberships = table.selectAll().where { table.user eq userId }.toList()
 
-        val chats = myMemberships.map { row ->
+        val chats = myMemberships.mapNotNull { row ->
             val chatId = row[table.chat].value
             val chatRow = Chats.ChatTable.selectAll().where { Chats.ChatTable.id eq chatId }.singleOrNull()
+            
+            // Filter out moment chats from regular chat list
+            val isMoment = chatRow?.get(Chats.ChatTable.isMoment) ?: false
+            if (isMoment) return@mapNotNull null
+            
             val isPrivate = chatRow?.get(Chats.ChatTable.private) ?: false
             val chatName = chatRow?.get(Chats.ChatTable.name)
             val myKey = row[table.key]
@@ -156,5 +161,25 @@ class ChatMembers: SqlDao<ChatMembers.ChatMemberTable>(ChatMemberTable)
         {
             it[doNotDisturb] = dnd
         } > 0
+    }
+
+    // ====== Moment-related methods ======
+
+    /**
+     * Check if user is a member of a chat
+     */
+    suspend fun isMember(chatId: ChatId, userId: UserId): Boolean = query()
+    {
+        table.selectAll().where { (table.chat eq chatId) and (table.user eq userId) }.any()
+    }
+
+    /**
+     * Get the user's key for a specific chat
+     */
+    suspend fun getMemberKey(chatId: ChatId, userId: UserId): String? = query()
+    {
+        table.selectAll()
+            .where { (table.chat eq chatId) and (table.user eq userId) }
+            .singleOrNull()?.get(table.key)
     }
 }
