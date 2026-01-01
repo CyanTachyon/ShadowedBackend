@@ -20,6 +20,7 @@ data class NotifyPacket(
     @Serializable
     enum class Type
     {
+        SUCCESS,
         INFO,
         WARNING,
         ERROR,
@@ -28,12 +29,14 @@ data class NotifyPacket(
 
 suspend fun DefaultWebSocketServerSession.sendNotify(type: NotifyPacket.Type, message: String): Unit =
     send(contentNegotiationJson.encodeToString(NotifyPacket(type, message)))
-suspend fun DefaultWebSocketServerSession.sendError(message: String) =
-    sendNotify(NotifyPacket.Type.ERROR, message)
+suspend fun DefaultWebSocketServerSession.sendSuccess(message: String) =
+    sendNotify(NotifyPacket.Type.SUCCESS, message)
 suspend fun DefaultWebSocketServerSession.sendInfo(message: String) =
     sendNotify(NotifyPacket.Type.INFO, message)
 suspend fun DefaultWebSocketServerSession.sendWarning(message: String) =
     sendNotify(NotifyPacket.Type.WARNING, message)
+suspend fun DefaultWebSocketServerSession.sendError(message: String) =
+    sendNotify(NotifyPacket.Type.ERROR, message)
 interface PacketHandler
 {
     val packetName: String

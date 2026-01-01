@@ -130,7 +130,7 @@ object PostMomentHandler : PacketHandler
             put("chatId", momentChatId.value)
         }
         session.send(contentNegotiationJson.encodeToString(response))
-        session.sendInfo("Moment posted successfully")
+        session.sendSuccess("Moment posted successfully")
     }
 }
 
@@ -261,7 +261,7 @@ object ToggleMomentPermissionHandler : PacketHandler
             put("canView", canView)
         }
         session.send(contentNegotiationJson.encodeToString(response))
-        session.sendInfo(if (canView) "Enable: call add_moment_viewer with encryptedKey" else "Friend can no longer view your moments")
+        session.sendSuccess(if (canView) "Enable: call add_moment_viewer with encryptedKey" else "Friend can no longer view your moments")
     }
 }
 

@@ -25,19 +25,37 @@ object LoginHandler : LoginPacketHandler
             Pair(user, pass)
         }.getOrNull() ?: run()
         {
-            session.sendError("Login failed: Invalid packet format")
+            val response = buildJsonObject()
+            {
+                put("packet", "login_result")
+                put("success", false)
+                put("error", "Login failed: Invalid packet format")
+            }
+            session.send(contentNegotiationJson.encodeToString(response))
             return null
         }
         
         val user = getKoin().get<Users>().getUserByUsername(username) ?: run()
         {
-            session.sendError("Login failed: User not found")
+            val response = buildJsonObject()
+            {
+                put("packet", "login_result")
+                put("success", false)
+                put("error", "Login failed: User not found")
+            }
+            session.send(contentNegotiationJson.encodeToString(response))
             return null
         }
         
         if (!verifyPassword(password, user.password))
         {
-            session.sendError("Login failed: Incorrect password")
+            val response = buildJsonObject()
+            {
+                put("packet", "login_result")
+                put("success", false)
+                put("error", "Login failed: Incorrect password")
+            }
+            session.send(contentNegotiationJson.encodeToString(response))
             return null
         }
         
@@ -45,7 +63,8 @@ object LoginHandler : LoginPacketHandler
 
         val response = buildJsonObject()
         {
-            put("packet", "login_success")
+            put("packet", "login_result")
+            put("success", true)
             put("user", contentNegotiationJson.encodeToJsonElement(user))
         }
         session.send(contentNegotiationJson.encodeToString(response))
@@ -115,6 +134,6 @@ object UpdateSignatureHandler : PacketHandler
             put("signature", signature)
         }
         session.send(contentNegotiationJson.encodeToString(response))
-        session.sendInfo("Signature updated successfully")
+        session.sendSuccess("Signature updated successfully")
     }
 }

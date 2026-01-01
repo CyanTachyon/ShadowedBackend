@@ -200,7 +200,14 @@ object RenameChatHandler: PacketHandler
         }
 
         chats.renameChat(chatId, newName)
-        session.sendInfo("Chat renamed successfully")
+        session.sendSuccess("Chat renamed successfully")
+        getKoin().get<ChatMembers>().getMemberIds(chatId).forEach()
+        { uid ->
+            SessionManager.forEachSession(uid)
+            { s ->
+                s.sendChatList(uid)
+            }
+        }
     }
 }
 
@@ -225,7 +232,7 @@ object SetDoNotDisturb: PacketHandler
         val chatMembers = getKoin().get<ChatMembers>()
         if (!chatMembers.setDoNotDisturb(chatId, loginUser.id, doNotDisturb))
             return session.sendError("You are not a member of this chat")
-        session.sendInfo("Do Not Disturb set to $doNotDisturb")
+        session.sendSuccess("Do Not Disturb set to $doNotDisturb")
         session.sendChatList(loginUser.id)
     }
 }
@@ -310,7 +317,7 @@ object SetBurnTimeHandler: PacketHandler
             }
         }
 
-        session.sendInfo(if (burnTime != null) "Burn time set to ${burnTime / 1000} seconds" else "Burn after read disabled")
+        session.sendSuccess(if (burnTime != null) "Burn time set to ${burnTime / 1000} seconds" else "Burn after read disabled")
     }
 }
 

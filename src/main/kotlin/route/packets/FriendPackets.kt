@@ -99,8 +99,6 @@ object AddFriendHandler : PacketHandler
             put("message", if (isExisting) "Opening existing chat" else "Friend added & Chat created")
         }
         session.send(contentNegotiationJson.encodeToString(response))
-        
-        SessionManager.forEachSession(targetUser.id)
-        { s -> s.sendChatList(targetUser.id) }
+        SessionManager.forEachSession(targetUser.id) { s -> s.sendChatList(targetUser.id) }
     }
 }

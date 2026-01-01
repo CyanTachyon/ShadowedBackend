@@ -67,13 +67,10 @@ object CreateGroupHandler : PacketHandler
                 chatMembers.addMember(chatId, user.id, key)
         }
         
-        session.sendInfo("Group created successfully")
+        session.sendSuccess("Group created successfully")
         
         for (user in memberUsers)
-        {
-            SessionManager.forEachSession(user.id)
-            { s -> s.sendChatList(user.id) }
-        }
+            SessionManager.forEachSession(user.id) { s -> s.sendChatList(user.id) }
     }
 }
 
@@ -122,7 +119,7 @@ object AddMemberToChatHandler : PacketHandler
         // Add the new member
         chatMembers.addMember(chatId, targetUser.id, encryptedKey)
 
-        session.sendInfo("Member added successfully")
+        session.sendSuccess("Member added successfully")
 
         val members = chatMembers.getChatMembersDetailed(chatId)
         
@@ -173,7 +170,7 @@ object KickMemberFromChatHandler : PacketHandler
                 SessionManager.forEachSession(user.id)
                 { s -> s.sendChatList(user.id) }
             }
-            return session.sendInfo("Chat deleted successfully")
+            return session.sendSuccess("Chat deleted successfully")
         }
 
         if (!isOwner && loginUser.username != username)
@@ -186,7 +183,7 @@ object KickMemberFromChatHandler : PacketHandler
             return session.sendError("Cannot kick member: Chat must have at least 3 members")
         
         chatMembers.removeMember(chatId, targetUser.id)
-        session.sendInfo("Member kicked successfully")
+        session.sendSuccess("Member kicked successfully")
         
         for (user in members)
         {
