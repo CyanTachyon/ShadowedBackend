@@ -187,7 +187,8 @@ object GetUserMomentsHandler : PacketHandler
         }
 
         val momentMessages = messages.getChatMessages(momentChat.id, before, count)
-        val momentItems = momentMessages.map { msg ->
+        // Filter out comments (messages with replyTo) - only return original moments
+        val momentItems = momentMessages.filter { it.replyTo == null }.map { msg ->
             MomentItem(
                 messageId = msg.id,
                 content = msg.content,
@@ -355,6 +356,233 @@ object GetMyMomentKeyHandler : PacketHandler
             put("exists", true)
             put("chatId", momentChat.id.value)
             if (key != null) put("key", key) else put("key", JsonNull)
+        }
+        session.send(contentNegotiationJson.encodeToString(response))
+    }
+}
+
+/**
+ * Delete a moment (only owner can delete their own moments)
+ */
+object DeleteMomentHandler : PacketHandler
+{
+    override val packetName = "delete_moment"
+
+    override suspend fun handle(
+        session: DefaultWebSocketServerSession,
+        packetData: String,
+        loginUser: User
+    )
+    {
+        val messageId = runCatching()
+        {
+            val json = contentNegotiationJson.parseToJsonElement(packetData)
+            json.jsonObject["messageId"]!!.jsonPrimitive.long
+        }.getOrNull() ?: return session.sendError("Delete moment failed: Invalid packet format")
+
+        val messages = getKoin().get<Messages>()
+        val chats = getKoin().get<Chats>()
+
+        // Get the message
+        val message = messages.getMessage(messageId)
+            ?: return session.sendError("Delete moment failed: Message not found")
+
+        // Check if this is a moment chat
+        val chat = chats.getChat(message.chatId)
+            ?: return session.sendError("Delete moment failed: Chat not found")
+
+        if (!chat.isMoment)
+            return session.sendError("Delete moment failed: Not a moment")
+
+        // Verify ownership - only owner can delete their own moments
+        if (chat.owner != loginUser.id)
+            return session.sendError("Delete moment failed: You can only delete your own moments")
+
+        // Delete the message
+        messages.deleteMessage(messageId)
+
+        // Notify all viewers
+        val response = buildJsonObject()
+        {
+            put("packet", "moment_deleted")
+            put("messageId", messageId)
+        }
+        session.send(contentNegotiationJson.encodeToString(response))
+        session.sendSuccess("Moment deleted successfully")
+    }
+}
+
+/**
+ * Edit a moment (only owner can edit their own moments)
+ */
+object EditMomentHandler : PacketHandler
+{
+    override val packetName = "edit_moment"
+
+    override suspend fun handle(
+        session: DefaultWebSocketServerSession,
+        packetData: String,
+        loginUser: User
+    )
+    {
+        @Serializable
+        data class EditMoment(
+            val messageId: Long,
+            val content: String,
+        )
+
+        val (messageId, newContent) = runCatching()
+        {
+            contentNegotiationJson.decodeFromString<EditMoment>(packetData)
+        }.getOrNull() ?: return session.sendError("Edit moment failed: Invalid packet format")
+
+        val messages = getKoin().get<Messages>()
+        val chats = getKoin().get<Chats>()
+
+        // Get the message
+        val message = messages.getMessage(messageId)
+            ?: return session.sendError("Edit moment failed: Message not found")
+
+        // Check if this is a moment chat
+        val chat = chats.getChat(message.chatId)
+            ?: return session.sendError("Edit moment failed: Chat not found")
+
+        if (!chat.isMoment)
+            return session.sendError("Edit moment failed: Not a moment")
+
+        // Verify ownership - only owner can edit their own moments
+        if (chat.owner != loginUser.id)
+            return session.sendError("Edit moment failed: You can only edit your own moments")
+
+        // Update the message content
+        messages.updateMessage(messageId, newContent)
+
+        // Notify all viewers
+        val response = buildJsonObject()
+        {
+            put("packet", "moment_edited")
+            put("messageId", messageId)
+            put("content", newContent)
+        }
+        session.send(contentNegotiationJson.encodeToString(response))
+        session.sendSuccess("Moment edited successfully")
+    }
+}
+
+/**
+ * Comment on a moment (authorized viewers can comment)
+ */
+object CommentMomentHandler : PacketHandler
+{
+    override val packetName = "comment_moment"
+
+    override suspend fun handle(
+        session: DefaultWebSocketServerSession,
+        packetData: String,
+        loginUser: User
+    )
+    {
+        @Serializable
+        data class CommentMoment(
+            val momentMessageId: Long,
+            val content: String,
+            val type: MessageType,
+        )
+
+        val (momentMessageId, content, type) = runCatching()
+        {
+            contentNegotiationJson.decodeFromString<CommentMoment>(packetData)
+        }.getOrNull() ?: return session.sendError("Comment moment failed: Invalid packet format")
+
+        val messages = getKoin().get<Messages>()
+        val chats = getKoin().get<Chats>()
+        val chatMembers = getKoin().get<ChatMembers>()
+
+        // Get the moment message
+        val momentMessage = messages.getMessage(momentMessageId)
+            ?: return session.sendError("Comment moment failed: Moment not found")
+
+        // Check if this is a moment chat
+        val chat = chats.getChat(momentMessage.chatId)
+            ?: return session.sendError("Comment moment failed: Chat not found")
+
+        if (!chat.isMoment)
+            return session.sendError("Comment moment failed: Not a moment")
+
+        // Verify user has permission to view this moment
+        if (!chatMembers.isMember(chat.id, loginUser.id))
+            return session.sendError("Comment moment failed: You don't have permission to comment")
+
+        // Add comment as a reply message
+        val commentId = messages.addReplyMessage(
+            content = if (type == MessageType.TEXT) content else "",
+            type = type,
+            chatId = chat.id,
+            senderId = loginUser.id,
+            replyToMessageId = momentMessageId
+        )
+
+        // Get the full comment message
+        val comment = messages.getMessage(commentId)
+            ?: return session.sendError("Comment moment failed: Failed to retrieve comment")
+
+        // Notify all viewers
+        val response = buildJsonObject()
+        {
+            put("packet", "comment_added")
+            put("comment", contentNegotiationJson.encodeToJsonElement(comment))
+        }
+        session.send(contentNegotiationJson.encodeToString(response))
+        session.sendSuccess("Comment added successfully")
+    }
+}
+
+/**
+ * Get comments for a specific moment
+ */
+object GetMomentCommentsHandler : PacketHandler
+{
+    override val packetName = "get_moment_comments"
+
+    override suspend fun handle(
+        session: DefaultWebSocketServerSession,
+        packetData: String,
+        loginUser: User
+    )
+    {
+        val momentMessageId = runCatching()
+        {
+            val json = contentNegotiationJson.parseToJsonElement(packetData)
+            json.jsonObject["momentMessageId"]!!.jsonPrimitive.long
+        }.getOrNull() ?: return session.sendError("Get moment comments failed: Invalid packet format")
+
+        val messages = getKoin().get<Messages>()
+        val chats = getKoin().get<Chats>()
+        val chatMembers = getKoin().get<ChatMembers>()
+
+        // Get the moment message
+        val momentMessage = messages.getMessage(momentMessageId)
+            ?: return session.sendError("Get moment comments failed: Moment not found")
+
+        // Check if this is a moment chat
+        val chat = chats.getChat(momentMessage.chatId)
+            ?: return session.sendError("Get moment comments failed: Chat not found")
+
+        if (!chat.isMoment)
+            return session.sendError("Get moment comments failed: Not a moment")
+
+        // Verify user has permission to view this moment
+        if (!chatMembers.isMember(chat.id, loginUser.id))
+            return session.sendError("Get moment comments failed: You don't have permission to view comments")
+
+        // Get all comments for this moment
+        val comments = messages.getMomentComments(momentMessageId)
+
+        val response = buildJsonObject()
+        {
+            put("packet", "moment_comments")
+            put("momentMessageId", momentMessageId)
+            put("comments", contentNegotiationJson.encodeToJsonElement(comments))
         }
         session.send(contentNegotiationJson.encodeToString(response))
     }

@@ -185,6 +185,7 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
     /**
      * Get all moment messages visible to a user using JOIN query
      * Joins chat_members -> chats (where is_moment=true) -> messages -> users (owner)
+     * Only returns original moments (replyTo is null), not comments
      */
     suspend fun getMomentMessagesForUser(
         userId: UserId,
@@ -201,7 +202,11 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
             .innerJoin(table, { chatsTable.id }, { table.chat })
             .innerJoin(usersTable, { chatsTable.owner }, { usersTable.id })
             .selectAll()
-            .where { (chatMembersTable.user eq userId) and (chatsTable.isMoment eq true) }
+            .where {
+                (chatMembersTable.user eq userId) and
+                (chatsTable.isMoment eq true) and
+                (table.replyTo.isNull())  // Only return original moments, not comments
+            }
             .orderBy(table.time to SortOrder.DESC)
             .limit(count)
             .offset(start = offset)
@@ -302,5 +307,46 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
     suspend fun deleteMessage(messageId: Long): Unit = query()
     {
         table.deleteWhere { table.id eq messageId }
+    }
+
+    /**
+     * Get all comments for a specific moment (messages that reply to the moment message)
+     */
+    suspend fun getMomentComments(momentMessageId: Long): List<Message> = query()
+    {
+        val usersTable = getKoin().get<Users>().table
+        val replyTable = table.alias("reply_table")
+        val replyUsersTable = Users.UserTable.alias("reply_users_table")
+
+        table
+            .innerJoin(usersTable, { this@Messages.table.sender }, { usersTable.id })
+            .leftJoin(replyTable, { this@Messages.table.replyTo }, { replyTable[this@Messages.table.id] })
+            .leftJoin(replyUsersTable, { replyTable[MessageTable.sender] }, { replyUsersTable[Users.UserTable.id] })
+            .selectAll()
+            .where { table.replyTo eq momentMessageId }
+            .orderBy(table.time to SortOrder.ASC)
+            .map {
+                val replyInfo = it.getOrNull(replyTable[MessageTable.id])?.let { replyId ->
+                    ReplyInfo(
+                        messageId = replyId.value,
+                        content = it[replyTable[MessageTable.content]],
+                        senderId = it[replyTable[MessageTable.sender]].value,
+                        senderName = it[replyUsersTable[Users.UserTable.username]],
+                        type = it[replyTable[MessageTable.type]]
+                    )
+                }
+
+                Message(
+                    id = it[table.id].value,
+                    content = it[table.content],
+                    type = it[table.type],
+                    chatId = it[table.chat].value,
+                    senderId = it[table.sender].value,
+                    senderName = it[usersTable.username],
+                    time = it[table.time].toEpochMilliseconds(),
+                    readAt = it[table.readAt]?.toEpochMilliseconds(),
+                    replyTo = replyInfo
+                )
+            }
     }
 }

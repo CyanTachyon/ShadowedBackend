@@ -39,6 +39,10 @@ private val packetHandlers: Map<String, PacketHandler> = listOf(
     ToggleMomentPermissionHandler,
     GetMomentPermissionHandler,
     GetMyMomentKeyHandler,
+    DeleteMomentHandler,
+    EditMomentHandler,
+    CommentMomentHandler,
+    GetMomentCommentsHandler,
     // Login packets (except login itself)
     GetPublicKeyByUsernameHandler,
     UpdateSignatureHandler,
