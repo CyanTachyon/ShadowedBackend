@@ -205,11 +205,10 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
             .innerJoin(table, { chatsTable.id }, { table.chat })
             .innerJoin(usersTable, { chatsTable.owner }, { usersTable.id })
             .selectAll()
-            .where {
-                (chatMembersTable.user eq userId) and
-                (chatsTable.isMoment eq true) and
-                (table.replyTo.isNull())  // Only return original moments, not comments
-            }
+            .andWhere { chatMembersTable.user eq userId }
+            .andWhere { chatsTable.isMoment eq true }
+            .andWhere { table.replyTo.isNull() }
+            .andWhere { table.sender eq chatsTable.owner }
             .orderBy(table.time to SortOrder.DESC)
             .limit(count)
             .offset(start = offset)
