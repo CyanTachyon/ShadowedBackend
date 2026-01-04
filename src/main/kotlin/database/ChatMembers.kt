@@ -175,6 +175,19 @@ class ChatMembers: SqlDao<ChatMembers.ChatMemberTable>(ChatMemberTable)
         } > 0
     }
 
+    /**
+     * Set the unread count to Int.MIN_VALUE for users who were @mentioned.
+     * This negative value indicates the user was mentioned, and will still be negative
+     * even after new messages increment the count.
+     */
+    suspend fun setAtMarker(chatId: ChatId, userId: UserId) = query()
+    {
+        table.update({ (table.chat eq chatId) and (table.user eq userId) })
+        {
+            it[unread] = Int.MIN_VALUE
+        } > 0
+    }
+
     // ====== Moment-related methods ======
 
     /**

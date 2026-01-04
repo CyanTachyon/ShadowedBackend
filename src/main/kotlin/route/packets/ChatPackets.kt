@@ -9,6 +9,7 @@ import moe.tachyon.shadowed.dataClass.ChatId
 import moe.tachyon.shadowed.dataClass.MessageType
 import moe.tachyon.shadowed.dataClass.User
 import moe.tachyon.shadowed.database.ChatMembers
+import moe.tachyon.shadowed.dataClass.UserId
 import moe.tachyon.shadowed.database.Chats
 import moe.tachyon.shadowed.database.Messages
 import moe.tachyon.shadowed.route.*
@@ -85,8 +86,9 @@ object SendMessageHandler: PacketHandler
             val message: String,
             val type: MessageType,
             val replyTo: Long? = null,
+            val atUserIds: List<UserId> = emptyList(),
         )
-        val (chatId, message, type, replyTo) = runCatching()
+        val (chatId, message, type, replyTo, atUserIds) = runCatching()
         {
             contentNegotiationJson.decodeFromString<SendMessage>(packetData)
         }.getOrNull() ?: return session.sendError("Send message failed: Invalid packet format")
@@ -149,6 +151,13 @@ object SendMessageHandler: PacketHandler
         chats.updateTime(chatId)
         chatMembers.incrementUnread(chatId, loginUser.id)
         chatMembers.resetUnread(chatId, loginUser.id)
+
+        // Set at marker for mentioned users
+        for (atUserId in atUserIds)
+        {
+            chatMembers.setAtMarker(chatId, atUserId)
+        }
+
         distributeMessage(fullMessage, silent = false)
     }
 }
@@ -255,20 +264,22 @@ object EditMessageHandler: PacketHandler
         data class EditMessage(
             val messageId: Long,
             val message: String?,
+            val atUserIds: List<UserId> = emptyList(),
         )
-        val (messageId, newContent) = runCatching()
+        val (messageId, newContent, atUserIds) = runCatching()
         {
             contentNegotiationJson.decodeFromString<EditMessage>(packetData)
         }.getOrNull() ?: return session.sendError("Edit message failed: Invalid packet format")
 
         val messages = getKoin().get<Messages>()
+        val chatMembers = getKoin().get<ChatMembers>()
         val originalMessage = messages.getMessage(messageId)
             ?: return session.sendError("Edit message failed: Message not found")
 
         if (originalMessage.senderId != loginUser.id)
             return session.sendError("Edit message failed: You can only edit your own messages")
 
-        if (getKoin().get<ChatMembers>().getUserChats(loginUser.id).none { it.chatId == originalMessage.chatId })
+        if (chatMembers.getUserChats(loginUser.id).none { it.chatId == originalMessage.chatId })
             return session.sendError("Edit message failed: You are not a member of this chat")
 
         // If deleting (newContent == null), also delete the associated file
@@ -281,6 +292,12 @@ object EditMessageHandler: PacketHandler
         }
 
         messages.updateMessage(messageId, newContent)
+
+        // Set at marker for mentioned users
+        for (atUserId in atUserIds)
+        {
+            chatMembers.setAtMarker(originalMessage.chatId, atUserId)
+        }
 
         distributeMessage(originalMessage.copy(
             content = newContent ?: "",
