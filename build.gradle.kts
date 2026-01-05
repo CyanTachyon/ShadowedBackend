@@ -12,7 +12,7 @@ plugins {
     id("io.ktor.plugin") version "3.3.2"
 }
 
-group = "moe.tacyon.shadowed"
+group = "moe.tachyon.shadowed"
 version = "0.0.1"
 
 application {

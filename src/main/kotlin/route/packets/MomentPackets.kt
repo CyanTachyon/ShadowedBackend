@@ -127,7 +127,9 @@ object PostMomentHandler : PacketHandler
             content = if (postData.type == MessageType.TEXT) postData.content else "",
             type = postData.type,
             chatId = momentChatId,
-            senderId = loginUser.id
+            senderId = loginUser.id,
+            burnTime = null,
+            replyTo = null,
         )
 
         chats.updateTime(momentChatId)
@@ -514,12 +516,13 @@ object CommentMomentHandler : PacketHandler
             return session.sendError("Comment moment failed: You don't have permission to comment")
 
         // Add comment as a reply message
-        val commentId = messages.addReplyMessage(
+        val commentId = messages.addChatMessage(
             content = if (type == MessageType.TEXT) content else "",
             type = type,
             chatId = chat.id,
             senderId = loginUser.id,
-            replyToMessageId = momentMessageId
+            replyTo = momentMessageId,
+            burnTime = null,
         )
 
         // Get the full comment message

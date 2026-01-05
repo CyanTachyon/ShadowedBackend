@@ -71,31 +71,34 @@ object BurnAfterReadService: KoinComponent
         for (info in expiredMessageInfos)
         {
             // Delete associated file first
-            logger.warning("Failed to delete file for expired message ${info.messageId}")
+            logger.warning("Failed to delete file for expired message ${info.first}")
             {
-                FileUtils.deleteChatFile(info.messageId)
+                FileUtils.deleteChatFile(info.first)
             }
 
             // Delete message
-            logger.warning("Failed to delete expired message ${info.messageId}")
+            logger.warning("Failed to delete expired message ${info.first}")
             {
-                messages.deleteMessage(info.messageId)
+                messages.deleteMessage(info.first)
             }
 
             // Distribute a minimal "deleted" message to notify clients
             // Use empty content and TEXT type to indicate deletion (same as edit_message with null)
             distributeMessage(Message(
-                id = info.messageId,
+                id = info.first,
                 content = "",
                 type = MessageType.TEXT,
-                chatId = info.chatId,
+                chatId = info.second,
                 senderId = UserId(0), // Not needed for deletion notification
                 senderName = "",
                 time = 0,
                 readAt = null,
+                replyTo = null,
+                burn = null,
+                senderIsDonor = false,
             ), silent = true)
 
-            logger.info("Deleted expired message ${info.messageId} from chat ${info.chatId}")
+            logger.info("Deleted expired message ${info.first} from chat ${info.second}")
         }
     }
 }

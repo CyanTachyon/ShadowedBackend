@@ -3,8 +3,11 @@ package moe.tachyon.shadowed.route
 import io.ktor.server.routing.*
 import io.ktor.server.websocket.*
 import io.ktor.websocket.*
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.consumeAsFlow
 import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.launch
+import kotlinx.datetime.Clock
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import moe.tachyon.shadowed.contentNegotiationJson
@@ -54,6 +57,21 @@ fun Route.webSocketRoute() = webSocket("/socket") socket@
     var loginUser: User? = null
     try
     {
+        launch()
+        {
+            // Ping-pong to keep connection alive
+            while (true)
+            {
+                val packet = buildJsonObject()
+                {
+                    put("packet", "time")
+                    put("t", Clock.System.now().toEpochMilliseconds())
+                }
+                send(contentNegotiationJson.encodeToString(packet))
+                delay(30000L) // 30 seconds
+            }
+        }
+
         incoming.consumeAsFlow().filterIsInstance<Frame.Text>().collect()
         { frame ->
             val data = frame.readText().split("\n")

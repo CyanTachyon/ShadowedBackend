@@ -9,17 +9,12 @@ import moe.tachyon.shadowed.dataClass.MessageType
 import moe.tachyon.shadowed.dataClass.Reaction
 import moe.tachyon.shadowed.dataClass.ReplyInfo
 import moe.tachyon.shadowed.dataClass.UserId
-import moe.tachyon.shadowed.database.utils.CustomExpression
-import moe.tachyon.shadowed.database.utils.CustomExpressionWithColumnType
 import moe.tachyon.shadowed.database.utils.singleOrNull
-import moe.tachyon.shadowed.logger.ShadowedLogger
 import moe.tachyon.shadowed.dataJson
 import org.jetbrains.exposed.dao.id.LongIdTable
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
-import org.jetbrains.exposed.sql.kotlin.datetime.KotlinInstantColumnType
 import org.jetbrains.exposed.sql.kotlin.datetime.timestamp
-import org.jetbrains.exposed.sql.kotlin.datetime.timestampWithTimeZone
 import org.jetbrains.exposed.sql.json.jsonb
 import org.koin.core.component.inject
 
@@ -37,6 +32,7 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
         val sender = reference("sender", Users.UserTable, onDelete = ReferenceOption.CASCADE, onUpdate = ReferenceOption.CASCADE).index()
         val replyTo = reference("reply_to", MessageTable, onDelete = ReferenceOption.SET_NULL, onUpdate = ReferenceOption.CASCADE).nullable().index()
         val readAt = timestamp("read_at").nullable().index().default(null)
+        val burn = long("burn").nullable().index().default(null)
         val reactions = jsonb("reactions", dataJson, ListSerializer(Reaction.serializer())).nullable().default(null)
     }
 
@@ -44,7 +40,9 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
         content: String,
         type: MessageType,
         chatId: ChatId,
-        senderId: UserId
+        senderId: UserId,
+        burnTime: Long?,
+        replyTo: Long?,
     ): Long = query()
     {
         table.insertAndGetId()
@@ -53,8 +51,8 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
             it[table.type] = type
             it[table.chat] = chatId
             it[table.sender] = senderId
-            it[table.readAt] = null
-            it[table.replyTo] = null
+            it[table.replyTo] = replyTo
+            it[table.burn] = burnTime
             it[table.time] = Clock.System.now()
         }.value
     }
@@ -81,7 +79,7 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
 
         // Find which emoji current user has reacted to, if any
         val userCurrentReactionIndex = currentReactions.indexOfFirst { userId in it.userIds }
-        var newReactions = currentReactions.toMutableList()
+        val newReactions = currentReactions.toMutableList()
 
         // Check if user is toggling the same emoji they already have
         val userHasThisEmoji = userCurrentReactionIndex >= 0 && currentReactions[userCurrentReactionIndex].emoji == emoji
@@ -138,30 +136,6 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
         }
 
     }
-
-    /**
-     * Add a message that replies to another message
-     * @return The ID of the newly created message
-     */
-    suspend fun addReplyMessage(
-        content: String,
-        type: MessageType,
-        chatId: ChatId,
-        senderId: UserId,
-        replyToMessageId: Long
-    ): Long = query()
-    {
-        table.insertAndGetId()
-        {
-            it[table.content] = content
-            it[table.type] = type
-            it[table.chat] = chatId
-            it[table.sender] = senderId
-            it[table.readAt] = null
-            it[table.replyTo] = replyToMessageId
-            it[table.time] = Clock.System.now()
-        }.value
-    }
     
     suspend fun getChatMessages(
         chatId: ChatId,
@@ -202,6 +176,7 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
                     senderName = it[usersTable.username],
                     time = it[table.time].toEpochMilliseconds(),
                     readAt = it[table.readAt]?.toEpochMilliseconds(),
+                    burn = it[table.burn],
                     replyTo = replyInfo,
                     senderIsDonor = it[usersTable.donationAmount] > 0,
                     reactions = it[table.reactions] ?: emptyList()
@@ -255,6 +230,7 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
                     senderName = it[usersTable.username],
                     time = it[table.time].toEpochMilliseconds(),
                     readAt = it[table.readAt]?.toEpochMilliseconds(),
+                    burn = it[table.burn],
                     replyTo = replyInfo,
                     senderIsDonor = it[usersTable.donationAmount] > 0,
                     reactions = it[table.reactions] ?: emptyList()
@@ -351,50 +327,25 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
 
     // ====== Burn after read methods ======
 
-    /**
-     * Mark a message as read and return the updated message
-     * @return The updated message, or null if not found
-     */
-    suspend fun markAsRead(messageId: Long): Message? = query()
+    suspend fun markAsRead(
+        messageId: Long,
+        time: Instant,
+        burn: Instant?,
+    ): Unit = query()
     {
-        val now = Clock.System.now()
         table.update({ (table.id eq messageId) and (table.readAt.isNull()) })
         {
-            it[readAt] = now
+            it[readAt] = time
+            it[table.burn] = burn?.toEpochMilliseconds()
         }
-        // Return the updated message
-        null // Will be fetched by getMessage after this
     }
 
-    /**
-     * Data class for expired message info (minimal data needed for deletion and notification)
-     */
-    data class ExpiredMessageInfo(
-        val messageId: Long,
-        val chatId: ChatId,
-    )
-
-    /**
-     * Get expired message IDs that should be deleted (readAt + burnTime < now)
-     * Only for private chats with burn time enabled
-     * Uses SQL-level time comparison for efficiency
-     */
-    suspend fun getExpiredMessageIds(): List<ExpiredMessageInfo> = query()
+    suspend fun getExpiredMessageIds(): List<Pair<Long, ChatId>> = query()
     {
-        val chatTable = chats.table
-        table
-            .innerJoin(chatTable, { this@Messages.table.chat }, { chatTable.id })
-            .select(table.id, table.chat)
-            .andWhere { chatTable.private eq true }
-            .andWhere { chatTable.burnTime.isNotNull() }
+        table.select(table.id, table.chat)
             .andWhere { table.readAt.isNotNull() }
-            .andWhere { CustomExpressionWithColumnType("${table.readAt.name} + ${chatTable.burnTime.name} * INTERVAL '1 millisecond'", KotlinInstantColumnType()) less Clock.System.now() }
-            .map { row ->
-                ExpiredMessageInfo(
-                    messageId = row[table.id].value,
-                    chatId = row[table.chat].value,
-                )
-            }
+            .andWhere { table.burn lessEq Clock.System.now().toEpochMilliseconds() }
+            .map { row -> row[table.id].value to row[table.chat].value }
     }
 
     /**
@@ -461,6 +412,7 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
                     senderName = it[usersTable.username],
                     time = it[table.time].toEpochMilliseconds(),
                     readAt = it[table.readAt]?.toEpochMilliseconds(),
+                    burn = it[table.burn],
                     replyTo = replyInfo,
                     senderIsDonor = it[usersTable.donationAmount] > 0,
                     reactions = it[table.reactions] ?: emptyList()

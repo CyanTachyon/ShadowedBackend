@@ -182,15 +182,9 @@ object KickMemberFromChatHandler : PacketHandler
                     FileUtils.deleteChatFile(msgId)
                 }
             }
-
-            // Delete messages from database
             getKoin().get<Messages>().deleteChatMessages(chatId)
-
             for (user in members)
-            {
-                SessionManager.forEachSession(user.id)
-                { s -> s.sendChatList(user.id) }
-            }
+                SessionManager.forEachSession(user.id) { s -> s.sendChatList(user.id) }
             return session.sendSuccess("Chat deleted successfully")
         }
 

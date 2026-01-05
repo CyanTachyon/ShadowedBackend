@@ -14,12 +14,14 @@ import moe.tachyon.shadowed.contentNegotiationJson
 import moe.tachyon.shadowed.dataClass.ChatId
 import moe.tachyon.shadowed.dataClass.Message
 import moe.tachyon.shadowed.dataClass.MessageType
+import moe.tachyon.shadowed.dataClass.UserId
 import moe.tachyon.shadowed.database.ChatMembers
 import moe.tachyon.shadowed.database.Chats
 import moe.tachyon.shadowed.database.Messages
 import moe.tachyon.shadowed.database.Users
 import moe.tachyon.shadowed.logger.ShadowedLogger
 import moe.tachyon.shadowed.utils.FileUtils
+import org.koin.ktor.ext.getKoin
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 
@@ -29,8 +31,8 @@ private val logger = ShadowedLogger.getLogger()
 @Serializable
 data class UploadTaskInfo(
     val uploadId: String,
-    val chatId: Int,
-    val userId: Int,
+    val chatId: ChatId,
+    val userId: UserId,
     val messageType: MessageType,
     val metadata: String,
     val totalChunks: Int,
@@ -68,8 +70,7 @@ fun Route.fileRoute()
         val passwordHash = call.request.header("X-Auth-Token")
         val messageType = call.request.header("X-Message-Type")?.let(MessageType::fromString)
         val metadata = call.request.header("X-Message-Metadata") ?: ""
-        val bodySize = call.request.header(HttpHeaders.ContentLength)?.toIntOrNull() 
-            ?: return@post call.respond(HttpStatusCode.LengthRequired)
+        val bodySize = call.request.header(HttpHeaders.ContentLength)?.toIntOrNull() ?: return@post call.respond(HttpStatusCode.LengthRequired)
         if (messageType != null && bodySize > getMaxSize(messageType))
         {
             call.respond(HttpStatusCode.PayloadTooLarge, "File size exceeds limit")
@@ -85,11 +86,14 @@ fun Route.fileRoute()
         if (getKoin().get<ChatMembers>().getUserChats(userAuth.id).none { it.chatId == chat })
             return@post call.respond(HttpStatusCode.Forbidden)
         val messages = getKoin().get<Messages>()
+        val burnTime = getKoin().get<Chats>().getChat(chat)?.burnTime
         val messageId = messages.addChatMessage(
             content = metadata,
             type = messageType,
             chatId = chat,
             senderId = userAuth.id,
+            burnTime = burnTime,
+            replyTo = null,
         )
         getKoin().get<Chats>().updateTime(chat)
         getKoin().get<ChatMembers>().incrementUnread(chat, userAuth.id)
@@ -111,7 +115,9 @@ fun Route.fileRoute()
                 senderName = userAuth.username,
                 time = Clock.System.now().toEpochMilliseconds(),
                 readAt = null,
-                senderIsDonor = userAuth.isDonor
+                senderIsDonor = userAuth.isDonor,
+                replyTo = null,
+                burn = null,
             ),
             silent = false
         )
@@ -124,7 +130,7 @@ fun Route.fileRoute()
     {
         @Serializable
         data class InitRequest(
-            val chatId: Int,
+            val chatId: ChatId,
             val messageType: String,
             val metadata: String,
             val totalChunks: Int,
@@ -143,10 +149,9 @@ fun Route.fileRoute()
 
         val request = call.receive<InitRequest>()
         val messageType = MessageType.fromString(request.messageType)
-        val chatId = ChatId(request.chatId)
 
         // 验证聊天权限
-        if (getKoin().get<ChatMembers>().getUserChats(userAuth.id).none { it.chatId == chatId })
+        if (getKoin().get<ChatMembers>().getUserChats(userAuth.id).none { it.chatId == request.chatId })
             return@post call.respond(HttpStatusCode.Forbidden)
 
         // 验证文件大小
@@ -158,7 +163,7 @@ fun Route.fileRoute()
         val taskInfo = UploadTaskInfo(
             uploadId = uploadId,
             chatId = request.chatId,
-            userId = userAuth.id.value,
+            userId = userAuth.id,
             messageType = messageType,
             metadata = request.metadata,
             totalChunks = request.totalChunks,
@@ -195,7 +200,7 @@ fun Route.fileRoute()
             return@post call.respond(HttpStatusCode.Unauthorized)
 
         val taskInfo = uploadTasks[uploadId] ?: return@post call.respond(HttpStatusCode.NotFound, "Upload task not found")
-        if (taskInfo.userId != userAuth.id.value)
+        if (taskInfo.userId != userAuth.id)
             return@post call.respond(HttpStatusCode.Forbidden)
 
         if (chunkIndex < 0 || chunkIndex >= taskInfo.totalChunks)
@@ -230,7 +235,7 @@ fun Route.fileRoute()
             return@get call.respond(HttpStatusCode.Unauthorized)
 
         val taskInfo = uploadTasks[uploadId] ?: return@get call.respond(HttpStatusCode.NotFound, "Upload task not found")
-        if (taskInfo.userId != userAuth.id.value)
+        if (taskInfo.userId != userAuth.id)
             return@get call.respond(HttpStatusCode.Forbidden)
 
         val uploadedChunks = FileUtils.getUploadedChunks(uploadId)
@@ -260,7 +265,7 @@ fun Route.fileRoute()
             return@post call.respond(HttpStatusCode.Unauthorized)
 
         val taskInfo = uploadTasks[uploadId] ?: return@post call.respond(HttpStatusCode.NotFound, "Upload task not found")
-        if (taskInfo.userId != userAuth.id.value)
+        if (taskInfo.userId != userAuth.id)
             return@post call.respond(HttpStatusCode.Forbidden)
 
         // 检查是否所有分片都已上传
@@ -268,15 +273,16 @@ fun Route.fileRoute()
         if (uploadedChunks.size != taskInfo.totalChunks)
             return@post call.respond(HttpStatusCode.BadRequest, "Not all chunks uploaded: ${uploadedChunks.size}/${taskInfo.totalChunks}")
 
-        val chatId = ChatId(taskInfo.chatId)
         val messages = getKoin().get<Messages>()
 
         // 创建消息记录
         val messageId = messages.addChatMessage(
             content = taskInfo.metadata,
             type = taskInfo.messageType,
-            chatId = chatId,
+            chatId = taskInfo.chatId,
             senderId = userAuth.id,
+            burnTime = getKoin().get<Chats>().getChat(taskInfo.chatId)?.burnTime,
+            replyTo = null,
         )
 
         // 合并分片
@@ -289,9 +295,9 @@ fun Route.fileRoute()
         }
 
         // 更新聊天时间和未读计数
-        getKoin().get<Chats>().updateTime(chatId)
-        getKoin().get<ChatMembers>().incrementUnread(chatId, userAuth.id)
-        getKoin().get<ChatMembers>().resetUnread(chatId, userAuth.id)
+        getKoin().get<Chats>().updateTime(taskInfo.chatId)
+        getKoin().get<ChatMembers>().incrementUnread(taskInfo.chatId, userAuth.id)
+        getKoin().get<ChatMembers>().resetUnread(taskInfo.chatId, userAuth.id)
 
         // 移除上传任务
         uploadTasks.remove(uploadId)
@@ -309,11 +315,14 @@ fun Route.fileRoute()
                 id = messageId,
                 content = taskInfo.metadata,
                 type = taskInfo.messageType,
-                chatId = ChatId(taskInfo.chatId),
+                chatId = taskInfo.chatId,
                 senderId = userAuth.id,
                 senderName = userAuth.username,
                 time = Clock.System.now().toEpochMilliseconds(),
                 readAt = null,
+                replyTo = null,
+                burn = null,
+                senderIsDonor = userAuth.isDonor,
             ),
             silent = false
         )
@@ -334,7 +343,7 @@ fun Route.fileRoute()
             return@delete call.respond(HttpStatusCode.Unauthorized)
 
         val taskInfo = uploadTasks[uploadId]
-        if (taskInfo != null && taskInfo.userId != userAuth.id.value)
+        if (taskInfo != null && taskInfo.userId != userAuth.id)
             return@delete call.respond(HttpStatusCode.Forbidden)
 
         // 删除分片目录

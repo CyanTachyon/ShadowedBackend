@@ -2,6 +2,7 @@ package moe.tachyon.shadowed.route.packets
 
 import io.ktor.server.websocket.*
 import io.ktor.websocket.*
+import kotlinx.datetime.Clock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
 import moe.tachyon.shadowed.contentNegotiationJson
@@ -15,6 +16,7 @@ import moe.tachyon.shadowed.database.Messages
 import moe.tachyon.shadowed.route.*
 import moe.tachyon.shadowed.utils.FileUtils
 import moe.tachyon.shadowed.logger.ShadowedLogger
+import kotlin.time.Duration.Companion.milliseconds
 
 private val logger = ShadowedLogger.getLogger()
 
@@ -117,31 +119,20 @@ object SendMessageHandler: PacketHandler
             return session.sendError("Send message failed: You are not a member of this chat")
 
         val messages = getKoin().get<Messages>()
-        val msgId = if (replyTo != null)
+        if (replyTo != null) run()
         {
-            // Verify the replied message exists and is in the same chat
             val repliedMessage = messages.getMessage(replyTo)
             if (repliedMessage == null || repliedMessage.chatId != chatId)
-            {
                 return session.sendError("Send message failed: Replied message not found or not in this chat")
-            }
-            messages.addReplyMessage(
-                content = if (type == MessageType.TEXT) message else "",
-                type = type,
-                chatId = chatId,
-                senderId = loginUser.id,
-                replyToMessageId = replyTo
-            )
         }
-        else
-        {
-            messages.addChatMessage(
-                content = if (type == MessageType.TEXT) message else "",
-                type = type,
-                chatId = chatId,
-                senderId = loginUser.id
-            )
-        }
+        val msgId = messages.addChatMessage(
+            content = if (type == MessageType.TEXT) message else "",
+            type = type,
+            chatId = chatId,
+            senderId = loginUser.id,
+            burnTime = chat?.burnTime,
+            replyTo = replyTo,
+        )
 
         // Get the full message including reply info if applicable
         val fullMessage = messages.getMessage(msgId) ?: run {
@@ -369,28 +360,18 @@ object MarkMessageReadHandler: PacketHandler
 
         val messages = getKoin().get<Messages>()
         val chatMembers = getKoin().get<ChatMembers>()
+        val chats = getKoin().get<Chats>()
 
-        // Get the message
-        val message = messages.getMessage(messageId)
-            ?: return // Message not found, silently ignore
+        val message = messages.getMessage(messageId) ?: return
+        val chat = chats.getChat(message.chatId) ?: return
 
-        // Check if user is a member of this chat
-        if (!chatMembers.isMember(message.chatId, loginUser.id))
-            return // Not a member, silently ignore
+        if (!chatMembers.isMember(message.chatId, loginUser.id)) return
+        if (message.senderId == loginUser.id || message.readAt != null || !chat.private) return
 
-        // Only mark as read if it's not sent by the current user and not already read
-        if (message.senderId == loginUser.id || message.readAt != null)
-            return // Own message or already read, silently ignore
-
-        // Mark the message as read
-        messages.markAsRead(messageId)
-
-        // Fetch the updated message and distribute to all members
-        val updatedMessage = messages.getMessage(messageId)
-        if (updatedMessage != null)
-        {
-            distributeMessage(updatedMessage, silent = true)
-        }
+        val now = Clock.System.now()
+        val burnTime = message.burn?.let { now + it.milliseconds }
+        messages.markAsRead(messageId, now, burnTime)
+        messages.getMessage(messageId)?.let { distributeMessage(it, silent = true) }
     }
 }
 
