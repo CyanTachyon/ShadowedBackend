@@ -21,7 +21,6 @@ import moe.tachyon.shadowed.database.Messages
 import moe.tachyon.shadowed.database.Users
 import moe.tachyon.shadowed.logger.ShadowedLogger
 import moe.tachyon.shadowed.utils.FileUtils
-import org.koin.ktor.ext.getKoin
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 
