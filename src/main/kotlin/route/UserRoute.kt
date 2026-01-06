@@ -108,9 +108,13 @@ fun Route.userRoute()
 
         get("/publicKey")
         {
-            val username = call.parameters["username"] ?: return@get call.respond(HttpStatusCode.BadRequest)
-            val user = getKoin().get<Users>().getUserByUsername(username) ?: return@get call.respond(HttpStatusCode.NotFound)
-            val response = buildJsonObject()
+            val username = call.request.queryParameters["username"]
+                ?: return@get call.respond(HttpStatusCode.BadRequest, "Missing username")
+
+            val user = getKoin().get<Users>().getUserByUsername(username)
+                ?: return@get call.respond(HttpStatusCode.NotFound)
+
+            val response = buildJsonObject
             {
                 put("publicKey", user.publicKey)
             }
@@ -119,24 +123,23 @@ fun Route.userRoute()
 
         get("/info")
         {
-            val idStr = call.parameters["id"]
+            val idStr = call.request.queryParameters["id"]
             val id = idStr?.toIntOrNull()
 
             if (id == null)
             {
-                call.respond(HttpStatusCode.BadRequest)
+                call.respond(HttpStatusCode.BadRequest, "Missing or invalid id")
                 return@get
             }
 
             val user = getKoin().get<Users>().getUser(UserId(id))
-
             if (user == null)
             {
                 call.respond(HttpStatusCode.NotFound)
                 return@get
             }
 
-            val response = buildJsonObject()
+            val response = buildJsonObject
             {
                 put("id", user.id.value)
                 put("username", user.username)

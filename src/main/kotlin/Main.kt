@@ -103,7 +103,7 @@ fun main(args: Array<String>)
     }
     val defaultConfig = Loader.getResource("application.yaml") ?: error("application.yaml not found")
     val customConfig = configFile.inputStream()
-    val resConfig = Loader.mergeConfigs(defaultConfig, customConfig)
+    val resConfig = Loader.mergeConfigs(customConfig, defaultConfig)
     val tempFile = File.createTempFile("resConfig", ".yaml")
     tempFile.writeText(Yaml.default.encodeToString(resConfig))
     val resArgs = args1 + "-config=${tempFile.absolutePath}"

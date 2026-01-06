@@ -59,63 +59,96 @@ class ChatMembers: SqlDao<ChatMembers.ChatMemberTable>(ChatMemberTable)
 
     suspend fun getUserChats(userId: UserId): List<ChatMember> = query()
     {
-        val myMemberships = table.selectAll().where { table.user eq userId }.toList()
+        val cm = table
+        val chatTable = chats.table
+        val userTable = users.table
 
-        val chats = myMemberships.mapNotNull()
-        { row ->
-            val chatId = row[table.chat].value
-            val chatRow = chats.table.selectAll().where { chats.table.id eq chatId }.singleOrNull()
-            
-            // Filter out moment chats from regular chat list
-            val isMoment = chatRow?.get(chats.table.isMoment) ?: false
-            if (isMoment) return@mapNotNull null
-            
-            val isPrivate = chatRow?.get(chats.table.private) ?: false
-            val chatName = chatRow?.get(chats.table.name)
-            val burnTime = chatRow?.get(chats.table.burnTime)
-            val myKey = row[table.key]
-            val otherMembersInfo = table.selectAll().where { (table.chat eq chatId) and (table.user neq userId) }
-                .map()
-                { mRow ->
-                    val uid = mRow[table.user].value
-                    val userRow = users.table.selectAll().where { users.table.id eq uid }.single()
-                    val uname = userRow[users.table.username]
-                    val isDonor = userRow[users.table.donationAmount] > 0
-                    Triple(uid, uname, isDonor)
-                }
-            
-            val parsedOtherNames = otherMembersInfo.map { it.second }
-            val parsedOtherIds = otherMembersInfo.map { it.first.value }
-            val otherUserIsDonor = otherMembersInfo.firstOrNull()?.third ?: false
 
-            // For private chats, use the other person's name instead of chat name
-            val displayName = if (isPrivate && parsedOtherNames.isNotEmpty())
-            {
-                parsedOtherNames.joinToString(", ")
-            }
-            else
-            {
-                chatName ?: parsedOtherNames.joinToString(", ")
-            }
-
-            ChatMember(
-                chatId = chatId,
-                name = displayName,
-                key = myKey,
-                parsedOtherNames = parsedOtherNames,
-                parsedOtherIds = parsedOtherIds,
-                isPrivate = isPrivate,
-                unreadCount = row[table.unread],
-                doNotDisturb = row[table.doNotDisturb],
-                burnTime = burnTime,
-                otherUserIsDonor = otherUserIsDonor
+        val membershipRows = (cm innerJoin chatTable)
+            .select(
+                cm.chat,
+                cm.key,
+                cm.unread,
+                cm.doNotDisturb,
+                chatTable.id,
+                chatTable.name,
+                chatTable.private,
+                chatTable.burnTime,
+                chatTable.lastChatAt,
             )
-        }
-        val chatTable =  get<Chats>().table
-        val times = chatTable.select(chatTable.id, chatTable.lastChatAt).where { chatTable.id inList chats.map { it.chatId } }
-            .associate { it[chatTable.id].value to it[chatTable.lastChatAt].toEpochMilliseconds() }
-        chats.sortedByDescending { times[it.chatId] ?: 0L }
+            .where { (cm.user eq userId) and (chatTable.isMoment eq false) }
+            .toList()
+
+        if (membershipRows.isEmpty()) return@query emptyList()
+
+        val chatIds = membershipRows.map { it[chatTable.id].value }
+
+        
+        val othersByChat: Map<ChatId, List<Triple<UserId, String, Boolean>>> =
+            (cm innerJoin userTable)
+                .select(
+                    cm.chat,
+                    userTable.id,
+                    userTable.username,
+                    userTable.donationAmount,
+                )
+                .where { (cm.chat inList chatIds) and (cm.user neq userId) }
+                .toList()
+                .groupBy(
+                    keySelector = { row -> row[cm.chat].value },
+                    valueTransform = { row ->
+                        val uid = row[userTable.id].value
+                        val uname = row[userTable.username]
+                        val isDonor = row[userTable.donationAmount] > 0
+                        Triple(uid, uname, isDonor)
+                    }
+                )
+
+        
+        membershipRows
+            .map { row ->
+                val chatId = row[chatTable.id].value
+                val isPrivate = row[chatTable.private]
+                val chatName = row[chatTable.name]
+                val burnTime = row[chatTable.burnTime]
+                val lastAt = row[chatTable.lastChatAt].toEpochMilliseconds()
+
+                val myKey = row[cm.key]
+                val others = othersByChat[chatId].orEmpty()
+
+                val parsedOtherNames = others.map { it.second }
+                val parsedOtherIds = others.map { it.first.value }
+
+                
+                val otherUserIsDonor = if (isPrivate && others.size == 1) others[0].third else false
+
+                val displayName =
+                    if (isPrivate && parsedOtherNames.isNotEmpty())
+                    {
+                        parsedOtherNames.joinToString(", ")
+                    }
+                    else
+                    {
+                        chatName.ifBlank { parsedOtherNames.joinToString(", ") }
+                    }
+
+                ChatMember(
+                    chatId = chatId,
+                    name = displayName,
+                    key = myKey,
+                    parsedOtherNames = parsedOtherNames,
+                    parsedOtherIds = parsedOtherIds,
+                    isPrivate = isPrivate,
+                    unreadCount = row[cm.unread],
+                    doNotDisturb = row[cm.doNotDisturb],
+                    burnTime = burnTime,
+                    otherUserIsDonor = otherUserIsDonor
+                ) to lastAt
+            }
+            .sortedByDescending { it.second }
+            .map { it.first }
     }
+
     
     suspend fun getMemberIds(chatId: ChatId): List<UserId> = query()
     {
