@@ -122,8 +122,8 @@ object SendMessageHandler: PacketHandler
         if (replyTo != null) run()
         {
             val repliedMessage = messages.getMessage(replyTo)
-            if (repliedMessage == null || repliedMessage.chatId != chatId)
-                return session.sendError("Send message failed: Replied message not found or not in this chat")
+            if (repliedMessage == null || repliedMessage.chatId != chatId || repliedMessage.senderId == null)
+                return session.sendError("Send message failed: Replied message not found or not in this chat or is a system message")
         }
         val msgId = messages.addChatMessage(
             content = if (type == MessageType.TEXT) message else "",
@@ -202,8 +202,14 @@ object RenameChatHandler: PacketHandler
         {
             return session.sendError("Only owner can rename chat")
         }
-
         chats.renameChat(chatId, newName)
+
+        // Add system message for rename
+        val id = getKoin().get<Messages>().addSystemMessage(
+            content = "${loginUser.username} changed the chat name to \"$newName\"",
+            chatId = chatId
+        )
+
         session.sendSuccess("Chat renamed successfully")
         getKoin().get<ChatMembers>().getMemberIds(chatId).forEach()
         { uid ->
@@ -212,6 +218,10 @@ object RenameChatHandler: PacketHandler
                 s.sendChatList(uid)
             }
         }
+
+        // Distribute system message to all members
+        val systemMessage = getKoin().get<Messages>().getMessage(id) ?: return
+        distributeMessage(systemMessage, false)
     }
 }
 

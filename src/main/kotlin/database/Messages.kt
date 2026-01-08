@@ -29,7 +29,7 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
         val type = enumerationByName<MessageType>("type", 20).default(MessageType.TEXT)
         val time = timestamp("time").index()
         val chat = reference("chat", Chats.ChatTable, onDelete = ReferenceOption.CASCADE, onUpdate = ReferenceOption.CASCADE).index()
-        val sender = reference("sender", Users.UserTable, onDelete = ReferenceOption.CASCADE, onUpdate = ReferenceOption.CASCADE).index()
+        val sender = reference("sender", Users.UserTable, onDelete = ReferenceOption.SET_NULL, onUpdate = ReferenceOption.CASCADE).nullable().index()
         val replyTo = reference("reply_to", MessageTable, onDelete = ReferenceOption.SET_NULL, onUpdate = ReferenceOption.CASCADE).nullable().index()
         val readAt = timestamp("read_at").nullable().index().default(null)
         val burn = long("burn").nullable().index().default(null)
@@ -53,6 +53,23 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
             it[table.sender] = senderId
             it[table.replyTo] = replyTo
             it[table.burn] = burnTime
+            it[table.time] = Clock.System.now()
+        }.value
+    }
+
+    suspend fun addSystemMessage(
+        content: String,
+        chatId: ChatId,
+    ): Long = query()
+    {
+        table.insertAndGetId()
+        {
+            it[table.content] = content
+            it[table.type] = MessageType.TEXT
+            it[table.chat] = chatId
+            it[table.sender] = null
+            it[table.replyTo] = null
+            it[table.burn] = null
             it[table.time] = Clock.System.now()
         }.value
     }
@@ -148,7 +165,7 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
         val replyUsersTable = users.table.alias("reply_users_table")
 
         table
-            .innerJoin(usersTable, { this@Messages.table.sender }, { usersTable.id })
+            .leftJoin(usersTable, { this@Messages.table.sender }, { usersTable.id })
             .leftJoin(replyTable, { this@Messages.table.replyTo }, { replyTable[this@Messages.table.id] })
             .leftJoin(replyUsersTable, { replyTable[MessageTable.sender] }, { replyUsersTable[users.table.id] })
             .selectAll()
@@ -157,12 +174,16 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
             .limit(count)
             .offset(start = begin)
             .map {
-                val replyInfo = it.getOrNull(replyTable[MessageTable.id])?.let { replyId ->
-                    ReplyInfo(
+                val replyInfo = it.getOrNull(replyTable[MessageTable.id])?.let()
+                { replyId ->
+                    val senderId = it[replyTable[MessageTable.sender]]?.value
+                    val senderName = it[replyUsersTable[users.table.username]]
+                    if (senderId == null) null
+                    else ReplyInfo(
                         messageId = replyId.value,
                         content = it[replyTable[MessageTable.content]],
-                        senderId = it[replyTable[MessageTable.sender]].value,
-                        senderName = it[replyUsersTable[users.table.username]],
+                        senderId = senderId,
+                        senderName = senderName,
                         type = it[replyTable[MessageTable.type]]
                     )
                 }
@@ -172,13 +193,13 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
                     content = it[table.content],
                     type = it[table.type],
                     chatId = it[table.chat].value,
-                    senderId = it[table.sender].value,
+                    senderId = it[table.sender]?.value,
                     senderName = it[usersTable.username],
                     time = it[table.time].toEpochMilliseconds(),
                     readAt = it[table.readAt]?.toEpochMilliseconds(),
                     burn = it[table.burn],
                     replyTo = replyInfo,
-                    senderIsDonor = it[usersTable.donationAmount] > 0,
+                    senderIsDonor = (it.getOrNull(usersTable.donationAmount) ?: 0) > 0,
                     reactions = it[table.reactions] ?: emptyList()
                 )
             }
@@ -204,19 +225,23 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
         val replyUsersTable = users.table.alias("reply_users_table")
 
         table
-            .innerJoin(usersTable, { this@Messages.table.sender }, { usersTable.id })
+            .leftJoin(usersTable, { this@Messages.table.sender }, { usersTable.id })
             .leftJoin(replyTable, { this@Messages.table.replyTo }, { replyTable[this@Messages.table.id] })
             .leftJoin(replyUsersTable, { replyTable[MessageTable.sender] }, { replyUsersTable[users.table.id] })
             .selectAll()
             .where { table.id eq messageId }
             .singleOrNull()
             ?.let {
-                val replyInfo = it.getOrNull(replyTable[MessageTable.id])?.let { replyId ->
-                    ReplyInfo(
+                val replyInfo = it.getOrNull(replyTable[MessageTable.id])?.let()
+                { replyId ->
+                    val senderId = it[replyTable[MessageTable.sender]]?.value
+                    val senderName = it[replyUsersTable[users.table.username]]
+                    if (senderId == null) null
+                    else ReplyInfo(
                         messageId = replyId.value,
                         content = it[replyTable[MessageTable.content]],
-                        senderId = it[replyTable[MessageTable.sender]].value,
-                        senderName = it[replyUsersTable[users.table.username]],
+                        senderId = senderId,
+                        senderName = senderName,
                         type = it[replyTable[MessageTable.type]]
                     )
                 }
@@ -226,13 +251,13 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
                     content = it[table.content],
                     type = it[table.type],
                     chatId = it[table.chat].value,
-                    senderId = it[table.sender].value,
+                    senderId = it[table.sender]?.value,
                     senderName = it[usersTable.username],
                     time = it[table.time].toEpochMilliseconds(),
                     readAt = it[table.readAt]?.toEpochMilliseconds(),
                     burn = it[table.burn],
                     replyTo = replyInfo,
-                    senderIsDonor = it[usersTable.donationAmount] > 0,
+                    senderIsDonor = (it.getOrNull(usersTable.donationAmount) ?: 0) > 0,
                     reactions = it[table.reactions] ?: emptyList()
                 )
             }
@@ -289,7 +314,7 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
                     ownerName = it[usersTable.username],
                     time = it[table.time].toEpochMilliseconds(),
                     key = it[chatMembersTable.key],
-                    ownerIsDonor = it[usersTable.donationAmount] > 0,
+                    ownerIsDonor = (it[usersTable.donationAmount] > 0),
                     reactions = it[table.reactions] ?: emptyList()
                 )
             }
@@ -386,19 +411,23 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
         val replyUsersTable = users.table.alias("reply_users_table")
 
         table
-            .innerJoin(usersTable, { this@Messages.table.sender }, { usersTable.id })
+            .leftJoin(usersTable, { this@Messages.table.sender }, { usersTable.id })
             .leftJoin(replyTable, { this@Messages.table.replyTo }, { replyTable[this@Messages.table.id] })
             .leftJoin(replyUsersTable, { replyTable[MessageTable.sender] }, { replyUsersTable[users.table.id] })
             .selectAll()
             .where { table.replyTo eq momentMessageId }
             .orderBy(table.time to SortOrder.ASC)
             .map {
-                val replyInfo = it.getOrNull(replyTable[MessageTable.id])?.let { replyId ->
-                    ReplyInfo(
+                val replyInfo = it.getOrNull(replyTable[MessageTable.id])?.let()
+                { replyId ->
+                    val senderId = it[replyTable[MessageTable.sender]]?.value
+                    val senderName = it[replyUsersTable[users.table.username]]
+                    if (senderId == null) null
+                    else ReplyInfo(
                         messageId = replyId.value,
                         content = it[replyTable[MessageTable.content]],
-                        senderId = it[replyTable[MessageTable.sender]].value,
-                        senderName = it[replyUsersTable[users.table.username]],
+                        senderId = senderId,
+                        senderName = senderName,
                         type = it[replyTable[MessageTable.type]]
                     )
                 }
@@ -408,13 +437,13 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
                     content = it[table.content],
                     type = it[table.type],
                     chatId = it[table.chat].value,
-                    senderId = it[table.sender].value,
+                    senderId = it[table.sender]?.value,
                     senderName = it[usersTable.username],
                     time = it[table.time].toEpochMilliseconds(),
                     readAt = it[table.readAt]?.toEpochMilliseconds(),
                     burn = it[table.burn],
                     replyTo = replyInfo,
-                    senderIsDonor = it[usersTable.donationAmount] > 0,
+                    senderIsDonor = (it.getOrNull(usersTable.donationAmount) ?: 0) > 0,
                     reactions = it[table.reactions] ?: emptyList()
                 )
             }

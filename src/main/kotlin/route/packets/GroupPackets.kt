@@ -15,6 +15,7 @@ import moe.tachyon.shadowed.route.SessionManager
 import moe.tachyon.shadowed.route.getKoin
 import moe.tachyon.shadowed.route.sendChatDetails
 import moe.tachyon.shadowed.route.sendChatList
+import moe.tachyon.shadowed.route.distributeMessage
 import moe.tachyon.shadowed.utils.FileUtils
 
 private val logger = ShadowedLogger.getLogger()
@@ -131,6 +132,14 @@ object AddMemberToChatHandler : PacketHandler
         for (user in members)
             SessionManager.forEachSession(user.id) { s -> s.sendChatDetails(chat, members) }
         SessionManager.forEachSession(targetUser.id) { s -> s.sendChatList(targetUser.id) }
+
+        val systemMessageId = getKoin().get<Messages>().addSystemMessage(
+            content = "${loginUser.username} invited ${targetUser.username} to the chat",
+            chatId = chatId
+        )
+
+        val systemMessage = getKoin().get<Messages>().getMessage(systemMessageId) ?: return
+        distributeMessage(systemMessage, silent = true)
     }
 }
 
@@ -201,9 +210,14 @@ object KickMemberFromChatHandler : PacketHandler
         session.sendSuccess("Member kicked successfully")
         
         for (user in members)
-        {
             SessionManager.forEachSession(user.id) { s -> s.sendChatDetails(chat, members) }
-        }
         SessionManager.forEachSession(targetUser.id) { s -> s.sendChatList(targetUser.id) }
+
+        val messageId = getKoin().get<Messages>().addSystemMessage(
+            content = "${loginUser.username} removed ${targetUser.username} from the chat",
+            chatId = chatId
+        )
+        val message = getKoin().get<Messages>().getMessage(messageId) ?: return
+        distributeMessage(message, silent = true)
     }
 }
