@@ -120,30 +120,58 @@ fun Route.userRoute()
         get("/info")
         {
             val idStr = call.parameters["id"]
-            val id = idStr?.toIntOrNull()
+            val username = call.parameters["username"]
 
-            if (id == null)
+            if (idStr != null)
+            {
+                val id = idStr.toIntOrNull()
+
+                if (id == null)
+                {
+                    call.respond(HttpStatusCode.BadRequest)
+                    return@get
+                }
+
+                val user = getKoin().get<Users>().getUser(UserId(id))
+
+                if (user == null)
+                {
+                    call.respond(HttpStatusCode.NotFound)
+                    return@get
+                }
+
+                val response = buildJsonObject()
+                {
+                    put("id", user.id.value)
+                    put("username", user.username)
+                    put("signature", user.signature)
+                    put("isDonor", user.isDonor)
+                }
+                call.respond(response)
+            }
+            else if (username != null)
+            {
+                val user = getKoin().get<Users>().getUserByUsername(username)
+
+                if (user == null)
+                {
+                    call.respond(HttpStatusCode.NotFound)
+                    return@get
+                }
+
+                val response = buildJsonObject()
+                {
+                    put("id", user.id.value)
+                    put("username", user.username)
+                    put("signature", user.signature)
+                    put("isDonor", user.isDonor)
+                }
+                call.respond(response)
+            }
+            else
             {
                 call.respond(HttpStatusCode.BadRequest)
-                return@get
             }
-
-            val user = getKoin().get<Users>().getUser(UserId(id))
-
-            if (user == null)
-            {
-                call.respond(HttpStatusCode.NotFound)
-                return@get
-            }
-
-            val response = buildJsonObject()
-            {
-                put("id", user.id.value)
-                put("username", user.username)
-                put("signature", user.signature)
-                put("isDonor", user.isDonor)
-            }
-            call.respond(response)
         }
     }
 }
