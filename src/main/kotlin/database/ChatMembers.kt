@@ -1,6 +1,7 @@
 package moe.tachyon.shadowed.database
 
 import moe.tachyon.shadowed.dataClass.ChatId
+import moe.tachyon.shadowed.dataClass.ChatFull
 import moe.tachyon.shadowed.dataClass.ChatMember
 import moe.tachyon.shadowed.dataClass.User
 import moe.tachyon.shadowed.dataClass.UserId
@@ -57,7 +58,7 @@ class ChatMembers: SqlDao<ChatMembers.ChatMemberTable>(ChatMemberTable)
         table.deleteWhere { (table.chat eq chatId) and (table.user eq userId) }
     }
 
-    suspend fun getUserChats(userId: UserId): List<ChatMember> = query()
+    suspend fun getUserChats(userId: UserId): List<ChatFull> = query()
     {
         val myMemberships = table.selectAll().where { table.user eq userId }.toList()
 
@@ -74,7 +75,7 @@ class ChatMembers: SqlDao<ChatMembers.ChatMemberTable>(ChatMemberTable)
             val chatName = chatRow?.get(chats.table.name)
             val burnTime = chatRow?.get(chats.table.burnTime)
             val myKey = row[table.key]
-            val otherMembersInfo = table.selectAll().where { (table.chat eq chatId) and (table.user neq userId) }
+            val allMembersInfo = table.selectAll().where { table.chat eq chatId }
                 .map()
                 { mRow ->
                     val uid = mRow[table.user].value
@@ -83,27 +84,30 @@ class ChatMembers: SqlDao<ChatMembers.ChatMemberTable>(ChatMemberTable)
                     val isDonor = userRow[users.table.donationAmount] > 0
                     Triple(uid, uname, isDonor)
                 }
-            
-            val parsedOtherNames = otherMembersInfo.map { it.second }
-            val parsedOtherIds = otherMembersInfo.map { it.first.value }
-            val otherUserIsDonor = otherMembersInfo.firstOrNull()?.third ?: false
 
-            // For private chats, use the other person's name instead of chat name
-            val displayName = if (isPrivate && parsedOtherNames.isNotEmpty())
+            val members = allMembersInfo.map { (uid, uname, _) ->
+                ChatMember(
+                    id = uid.value,
+                    name = uname
+                )
+            }
+            val otherUserIsDonor = allMembersInfo.find { it.first != userId }?.third ?: false
+
+            // For private chats, use other person's name instead of chat name
+            val displayName = if (isPrivate && members.size == 2)
             {
-                parsedOtherNames.joinToString(", ")
+                members.find { it.id != userId.value }?.name ?: chatName
             }
             else
             {
-                chatName ?: parsedOtherNames.joinToString(", ")
+                chatName ?: members.joinToString(", ") { it.name }
             }
 
-            ChatMember(
+            ChatFull(
                 chatId = chatId,
                 name = displayName,
                 key = myKey,
-                parsedOtherNames = parsedOtherNames,
-                parsedOtherIds = parsedOtherIds,
+                members = members,
                 isPrivate = isPrivate,
                 unreadCount = row[table.unread],
                 doNotDisturb = row[table.doNotDisturb],
@@ -176,8 +180,8 @@ class ChatMembers: SqlDao<ChatMembers.ChatMemberTable>(ChatMemberTable)
     }
 
     /**
-     * Set the unread count to Int.MIN_VALUE for users who were @mentioned.
-     * This negative value indicates the user was mentioned, and will still be negative
+     * Set unread count to Int.MIN_VALUE for users who were @mentioned.
+     * This negative value indicates user was mentioned, and will still be negative
      * even after new messages increment the count.
      */
     suspend fun setAtMarker(chatId: ChatId, userId: UserId) = query()
@@ -199,7 +203,7 @@ class ChatMembers: SqlDao<ChatMembers.ChatMemberTable>(ChatMemberTable)
     }
 
     /**
-     * Get the user's key for a specific chat
+     * Get user's key for a specific chat
      */
     suspend fun getMemberKey(chatId: ChatId, userId: UserId): String? = query()
     {

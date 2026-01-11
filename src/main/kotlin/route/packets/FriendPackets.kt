@@ -86,9 +86,9 @@ object AddFriendHandler : PacketHandler
         
         // Check if chat already exists
         val existingMembership = chatMembers.getUserChats(loginUser.id)
-            .find { chat -> 
-                chat.parsedOtherNames.size == 1 && 
-                chat.parsedOtherNames.contains(targetUser.username) 
+            .find { chat ->
+                chat.members.size == 2 &&
+                chat.members.any { it.name == targetUser.username }
             }
         
         val chatId: ChatId
