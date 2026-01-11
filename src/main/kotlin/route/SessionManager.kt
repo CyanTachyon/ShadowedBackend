@@ -90,6 +90,12 @@ suspend fun WebSocketSession.sendUnreadCount(userId: UserId, chatId: ChatId)
 
 suspend fun WebSocketSession.sendChatDetails(chat: Chat, members: List<User>)
 {
+    // Check online status for each member and sort online members first
+    val membersWithOnlineStatus = members.map { member ->
+        val isOnline = sessionsMutex.withLock { sessions.containsKey(member.id) }
+        member to isOnline
+    }.sortedByDescending { it.second } // Sort by isOnline (true first)
+
     val response = buildJsonObject()
     {
         put("packet", "chat_details")
@@ -101,12 +107,13 @@ suspend fun WebSocketSession.sendChatDetails(chat: Chat, members: List<User>)
             put("isPrivate", chat.private)
             put("members", buildJsonArray()
             {
-                members.forEach { member ->
+                membersWithOnlineStatus.forEach { (member, isOnline) ->
                     addJsonObject()
                     {
                         put("id", member.id.value)
                         put("username", member.username)
                         put("isDonor", member.isDonor)
+                        put("isOnline", isOnline)
                         // Only include signature for private chats
                         if (chat.private) put("signature", member.signature)
                     }
