@@ -2,6 +2,7 @@ package moe.tachyon.shadowed.utils
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import moe.tachyon.shadowed.dataClass.ChatId
 import moe.tachyon.shadowed.dataClass.UserId
 import moe.tachyon.shadowed.dataDir
 import moe.tachyon.shadowed.logger.ShadowedLogger
@@ -14,6 +15,7 @@ object FileUtils
 {
     private val logger = ShadowedLogger.getLogger()
     val userAvatarDir = File(dataDir, "user_avatars").apply { mkdirs() }
+    val groupAvatarDir = File(dataDir, "group_avatars").apply { mkdirs() }
     val chatFilesDir = File(dataDir, "chat_files").apply { mkdirs() }
     val uploadChunksDir = File(dataDir, "upload_chunks").apply { mkdirs() }
 
@@ -38,6 +40,41 @@ object FileUtils
         {
             ImageIO.write(image1, "png", avatarFile)
         }
+    }
+
+    suspend fun getGroupAvatar(chatId: ChatId): BufferedImage? = runCatching()
+    {
+        val avatarFile = File(groupAvatarDir, "$chatId.png")
+        if (!avatarFile.exists()) return null
+        return withContext(Dispatchers.IO)
+        {
+            ImageIO.read(avatarFile)
+        }
+    }.getOrNull()
+
+    suspend fun setGroupAvatar(chatId: ChatId, image: BufferedImage)
+    {
+        val image1 = BufferedImage(512, 512, BufferedImage.TYPE_INT_ARGB)
+        val g = image1.createGraphics()
+        g.drawImage(image, 0, 0, 512, 512, null)
+        g.dispose()
+        val avatarFile = File(groupAvatarDir, "$chatId.png")
+        withContext(Dispatchers.IO)
+        {
+            ImageIO.write(image1, "png", avatarFile)
+        }
+    }
+
+    suspend fun deleteGroupAvatar(chatId: ChatId): Boolean = withContext(Dispatchers.IO)
+    {
+        val avatarFile = File(groupAvatarDir, "$chatId.png")
+        if (!avatarFile.exists()) return@withContext false
+        val deleted = avatarFile.delete()
+        if (deleted)
+        {
+            logger.info("Deleted avatar for group $chatId")
+        }
+        return@withContext deleted
     }
 
     suspend fun saveChatFile(messageId: Long, bytes: InputStream)

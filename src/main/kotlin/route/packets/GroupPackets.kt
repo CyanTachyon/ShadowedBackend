@@ -191,6 +191,12 @@ object KickMemberFromChatHandler : PacketHandler
                     FileUtils.deleteChatFile(msgId)
                 }
             }
+
+            // Delete group avatar for this chat
+            logger.warning("Failed to delete avatar for group $chatId")
+            {
+                FileUtils.deleteGroupAvatar(chatId)
+            }
             getKoin().get<Messages>().deleteChatMessages(chatId)
             for (user in members)
                 SessionManager.forEachSession(user.id) { s -> s.sendChatList(user.id) }
