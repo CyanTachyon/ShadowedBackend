@@ -27,9 +27,9 @@ data class MomentItem(
     val ownerId: Int,
     val ownerName: String,
     val time: Long,
-    val key: String, // Encrypted key for decryption
-    val ownerIsDonor: Boolean = false,
-    val reactions: List<Reaction> = emptyList()
+    val key: String,
+    val ownerIsDonor: Boolean,
+    val reactions: List<Reaction>,
 )
 
 /**
@@ -99,7 +99,7 @@ object PostMomentHandler : PacketHandler
         data class PostMoment(
             val content: String,
             val type: MessageType,
-            val key: String?, // Encrypted key (only needed when first creating moment chat)
+            val key: String,
         )
 
         val postData = runCatching()
@@ -117,12 +117,12 @@ object PostMomentHandler : PacketHandler
         // Add user as member if not already
         val isMember = chatMembers.isMember(momentChatId, loginUser.id)
         if (!isMember)
-        {
-            val key = postData.key ?: return session.sendError("Post moment failed: Key required for first moment")
-            chatMembers.addMember(momentChatId, loginUser.id, key)
-        }
+            chatMembers.addMember(momentChatId, loginUser.id, postData.key)
 
-        // Add the message
+        chats.updateTime(momentChatId)
+
+        if (postData.content.isEmpty() && postData.type == MessageType.TEXT) return
+
         val msgId = messages.addChatMessage(
             content = if (postData.type == MessageType.TEXT) postData.content else "",
             type = postData.type,
@@ -132,16 +132,27 @@ object PostMomentHandler : PacketHandler
             replyTo = null,
         )
 
-        chats.updateTime(momentChatId)
-
+        session.sendSuccess("Moment posted successfully")
         val response = buildJsonObject()
         {
-            put("packet", "moment_posted")
-            put("messageId", msgId)
-            put("chatId", momentChatId.value)
+            put("packet", "moments_list")
+            put("moments", contentNegotiationJson.encodeToJsonElement(
+                listOf(
+                    MomentItem(
+                        messageId = msgId,
+                        content = postData.content,
+                        type = postData.type,
+                        ownerId = loginUser.id.value,
+                        ownerName = loginUser.username,
+                        time = System.currentTimeMillis(),
+                        key = postData.key,
+                        ownerIsDonor = loginUser.isDonor,
+                        reactions = emptyList()
+                    )
+                )
+            ))
         }
         session.send(contentNegotiationJson.encodeToString(response))
-        session.sendSuccess("Moment posted successfully")
     }
 }
 
@@ -181,7 +192,7 @@ object GetUserMomentsHandler : PacketHandler
             // No moments yet
             val response = buildJsonObject()
             {
-                put("packet", "user_moments_list")
+                put("packet", "moments_list")
                 put("userId", targetUserId.value)
                 put("username", targetUser.username)
                 put("moments", buildJsonArray { })
@@ -199,7 +210,8 @@ object GetUserMomentsHandler : PacketHandler
 
         val momentMessages = messages.getChatMessages(momentChat.id, before, count)
         // Filter out comments (messages with replyTo) - only return original moments
-        val momentItems = momentMessages.filter { it.replyTo == null }.map { msg ->
+        val momentItems = momentMessages.filter { it.replyTo == null }.map()
+        { msg ->
             MomentItem(
                 messageId = msg.id,
                 content = msg.content,
@@ -208,13 +220,14 @@ object GetUserMomentsHandler : PacketHandler
                 ownerName = targetUser.username,
                 time = msg.time,
                 key = key ?: "",
-                reactions = msg.reactions
+                reactions = msg.reactions,
+                ownerIsDonor = targetUser.isDonor,
             )
         }
 
         val response = buildJsonObject()
         {
-            put("packet", "user_moments_list")
+            put("packet", "moments_list")
             put("userId", targetUserId.value)
             put("username", targetUser.username)
             put("moments", contentNegotiationJson.encodeToJsonElement(momentItems))
