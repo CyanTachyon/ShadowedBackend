@@ -2,17 +2,18 @@ package moe.tachyon.shadowed.route.packets
 
 import io.ktor.server.websocket.*
 import io.ktor.websocket.*
+import kotlinx.datetime.Instant
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
 import moe.tachyon.shadowed.contentNegotiationJson
 import moe.tachyon.shadowed.dataClass.MessageType
+import moe.tachyon.shadowed.dataClass.Reaction
 import moe.tachyon.shadowed.dataClass.User
 import moe.tachyon.shadowed.dataClass.UserId
-import moe.tachyon.shadowed.dataClass.Reaction
 import moe.tachyon.shadowed.database.*
+import moe.tachyon.shadowed.logger.ShadowedLogger
 import moe.tachyon.shadowed.route.getKoin
 import moe.tachyon.shadowed.utils.FileUtils
-import moe.tachyon.shadowed.logger.ShadowedLogger
 
 private val logger = ShadowedLogger.getLogger()
 
@@ -33,8 +34,10 @@ data class MomentItem(
 )
 
 /**
- * Get all visible moments for the current user
- * Returns moments from chats where user is a member and chat is a moment chat
+ * Get moments - can get all visible moments or a specific user's moments
+ * When userId is null, returns all moments the current user can see
+ * When userId is provided, returns that user's moments (if user has permission)
+ * Uses 'before' parameter (timestamp) to get moments older than that time
  */
 object GetMomentsHandler : PacketHandler
 {
@@ -46,36 +49,88 @@ object GetMomentsHandler : PacketHandler
         loginUser: User
     )
     {
-        val (offset, count) = runCatching()
+        val (userId, before, count) = runCatching()
         {
             val json = contentNegotiationJson.parseToJsonElement(packetData)
-            val o = json.jsonObject["offset"]?.jsonPrimitive?.longOrNull ?: 0L
+            val uid = json.jsonObject["userId"]?.jsonPrimitive?.intOrNull?.let(::UserId)
+            val b = json.jsonObject["before"]?.jsonPrimitive?.longOrNull?.let(Instant::fromEpochMilliseconds)
             val c = json.jsonObject["count"]?.jsonPrimitive?.intOrNull ?: 50
-            Pair(o, c)
-        }.getOrElse { Pair(0L, 50) }
+            Triple(uid, b, c)
+        }.getOrElse { Triple(null, null, 50) }
 
         val messages = getKoin().get<Messages>()
+        val chats = getKoin().get<Chats>()
+        val chatMembers = getKoin().get<ChatMembers>()
+        val users = getKoin().get<Users>()
 
-        // Use JOIN query to get all moment messages user can see
-        val momentMessages = messages.getMomentMessagesForUser(loginUser.id, offset, count)
+        val momentItems = if (userId == null)
+        {
+            // Get all visible moments for the current user
+            messages.getMomentMessagesForUser(loginUser.id, before, count).map { msg ->
+                MomentItem(
+                    messageId = msg.messageId,
+                    content = msg.content,
+                    type = msg.type,
+                    ownerId = msg.ownerId,
+                    ownerName = msg.ownerName,
+                    time = msg.time,
+                    key = msg.key,
+                    ownerIsDonor = msg.ownerIsDonor,
+                    reactions = msg.reactions
+                )
+            }
+        }
+        else
+        {
+            // Get a specific user's moments
+            val targetUser = users.getUser(userId)
+                ?: return session.sendError("User not found")
 
-        val momentItems = momentMessages.map { msg ->
-            MomentItem(
-                messageId = msg.messageId,
-                content = msg.content,
-                type = msg.type,
-                ownerId = msg.ownerId,
-                ownerName = msg.ownerName,
-                time = msg.time,
-                key = msg.key,
-                ownerIsDonor = msg.ownerIsDonor,
-                reactions = msg.reactions
-            )
+            val momentChat = chats.getMomentChatByOwner(userId)
+            if (momentChat == null)
+            {
+                // No moments yet
+                val response = buildJsonObject()
+                {
+                    put("packet", "moments_list")
+                    put("userId", userId.value)
+                    put("username", targetUser.username)
+                    put("moments", buildJsonArray { })
+                }
+                session.send(contentNegotiationJson.encodeToString(response))
+                return
+            }
+
+            // Check if requester is owner or a member (has key)
+            val key = chatMembers.getMemberKey(momentChat.id, loginUser.id)
+            if (key == null && userId != loginUser.id)
+                return session.sendError("You are not a viewer of this user's moments")
+
+            messages.getChatMessages(momentChat.id, before, count)
+                .filter { it.replyTo == null }
+                .map { msg ->
+                    MomentItem(
+                        messageId = msg.id,
+                        content = msg.content,
+                        type = msg.type,
+                        ownerId = userId.value,
+                        ownerName = targetUser.username,
+                        time = msg.time,
+                        key = key ?: "",
+                        reactions = msg.reactions,
+                        ownerIsDonor = targetUser.isDonor,
+                    )
+                }
         }
 
         val response = buildJsonObject()
         {
             put("packet", "moments_list")
+            if (userId != null)
+            {
+                put("userId", userId.value)
+                put("username", users.getUser(userId)!!.username)
+            }
             put("moments", contentNegotiationJson.encodeToJsonElement(momentItems))
         }
         session.send(contentNegotiationJson.encodeToString(response))
@@ -151,86 +206,6 @@ object PostMomentHandler : PacketHandler
                     )
                 )
             ))
-        }
-        session.send(contentNegotiationJson.encodeToString(response))
-    }
-}
-
-/**
- * Get a specific user's moments
- */
-object GetUserMomentsHandler : PacketHandler
-{
-    override val packetName = "get_user_moments"
-
-    override suspend fun handle(
-        session: DefaultWebSocketServerSession,
-        packetData: String,
-        loginUser: User
-    )
-    {
-        val (targetUserId, before, count) = runCatching()
-        {
-            val json = contentNegotiationJson.parseToJsonElement(packetData)
-            val uid = json.jsonObject["userId"]!!.jsonPrimitive.int.let(::UserId)
-            val b = json.jsonObject["before"]?.jsonPrimitive?.longOrNull ?: Long.MAX_VALUE
-            val c = json.jsonObject["count"]?.jsonPrimitive?.intOrNull ?: 50
-            Triple(uid, b, c)
-        }.getOrNull() ?: return session.sendError("Get user moments failed: Invalid packet format")
-
-        val chats = getKoin().get<Chats>()
-        val chatMembers = getKoin().get<ChatMembers>()
-        val messages = getKoin().get<Messages>()
-        val users = getKoin().get<Users>()
-
-        val targetUser = users.getUser(targetUserId)
-            ?: return session.sendError("User not found")
-
-        val momentChat = chats.getMomentChatByOwner(targetUserId)
-        if (momentChat == null)
-        {
-            // No moments yet
-            val response = buildJsonObject()
-            {
-                put("packet", "moments_list")
-                put("userId", targetUserId.value)
-                put("username", targetUser.username)
-                put("moments", buildJsonArray { })
-            }
-            session.send(contentNegotiationJson.encodeToString(response))
-            return
-        }
-
-        // Check if requester is owner or a member (has key)
-        val key = chatMembers.getMemberKey(momentChat.id, loginUser.id)
-        if (key == null && targetUserId != loginUser.id)
-        {
-            return session.sendError("You are not a viewer of this user's moments")
-        }
-
-        val momentMessages = messages.getChatMessages(momentChat.id, before, count)
-        // Filter out comments (messages with replyTo) - only return original moments
-        val momentItems = momentMessages.filter { it.replyTo == null }.map()
-        { msg ->
-            MomentItem(
-                messageId = msg.id,
-                content = msg.content,
-                type = msg.type,
-                ownerId = targetUserId.value,
-                ownerName = targetUser.username,
-                time = msg.time,
-                key = key ?: "",
-                reactions = msg.reactions,
-                ownerIsDonor = targetUser.isDonor,
-            )
-        }
-
-        val response = buildJsonObject()
-        {
-            put("packet", "moments_list")
-            put("userId", targetUserId.value)
-            put("username", targetUser.username)
-            put("moments", contentNegotiationJson.encodeToJsonElement(momentItems))
         }
         session.send(contentNegotiationJson.encodeToString(response))
     }

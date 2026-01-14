@@ -111,16 +111,15 @@ object AddMemberToChatHandler : PacketHandler
         }
         
         // Verify current user is a member of this chat
-        val isMember = chatMembers.getUserChats(loginUser.id).any { it.chatId == chatId }
-        
-        if (!isMember) return session.sendError("You are not a member of this chat")
+        if (!chatMembers.isMember(chatId, loginUser.id))
+            return session.sendError("You are not a member of this chat")
 
         // Get target user
         val targetUser = getKoin().get<Users>().getUserByUsername(username) ?: return session.sendError("User not found: $username")
 
         // Check if user is already a member
-        val alreadyMember = chatMembers.getUserChats(targetUser.id).any { it.chatId == chatId }
-        if (alreadyMember) return session.sendError("$username is already a member")
+        if (chatMembers.isMember(chatId, targetUser.id))
+            return session.sendError("$username is already a member")
 
         // Add the new member
         chatMembers.addMember(chatId, targetUser.id, encryptedKey)

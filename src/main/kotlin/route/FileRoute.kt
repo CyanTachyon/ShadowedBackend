@@ -82,7 +82,7 @@ fun Route.fileRoute()
         val userAuth = users.getUserByUsername(username)
         if (userAuth == null || !verifyPassword(passwordHash, userAuth.password))
             return@post call.respond(HttpStatusCode.Unauthorized)
-        if (getKoin().get<ChatMembers>().getUserChats(userAuth.id).none { it.chatId == chat })
+        if (!getKoin().get<ChatMembers>().isMember(chat, userAuth.id))
             return@post call.respond(HttpStatusCode.Forbidden)
         val messages = getKoin().get<Messages>()
         val burnTime = getKoin().get<Chats>().getChat(chat)?.burnTime
@@ -150,7 +150,7 @@ fun Route.fileRoute()
         val messageType = MessageType.fromString(request.messageType)
 
         // 验证聊天权限
-        if (getKoin().get<ChatMembers>().getUserChats(userAuth.id).none { it.chatId == request.chatId })
+        if (!getKoin().get<ChatMembers>().isMember(request.chatId, userAuth.id))
             return@post call.respond(HttpStatusCode.Forbidden)
 
         // 验证文件大小

@@ -15,6 +15,7 @@ import moe.tachyon.shadowed.logger.ShadowedLogger
 import moe.tachyon.shadowed.utils.FileUtils
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import moe.tachyon.shadowed.dataClass.UserId.Companion.toUserIdOrNull
 import moe.tachyon.shadowed.database.Chats
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -71,31 +72,22 @@ fun Route.userRoute()
 
         get("/{id}/avatar")
         {
-            val idStr = call.parameters["id"]
-            val id = idStr?.toIntOrNull()
+            val id = call.parameters["id"]?.toUserIdOrNull() ?: return@get call.respond(HttpStatusCode.BadRequest)
 
-            if (id == null)
-            {
-                call.respond(HttpStatusCode.BadRequest)
-                return@get
-            }
-
-            val avatarImage = FileUtils.getAvatar(UserId(id))
+            val avatarImage = FileUtils.getAvatar(id)
 
             call.response.header(HttpHeaders.CacheControl, "public, max-age=300")
             if (avatarImage != null)
             {
                 val bytes = ByteArrayOutputStream().also { ImageIO.write(avatarImage, "png", it) }.toByteArray()
                 val hash = bytes.contentHashCode().toString()
-                if (call.request.headers[HttpHeaders.IfNoneMatch] == hash)
-                    return@get call.respond(HttpStatusCode.NotModified)
+                if (call.request.headers[HttpHeaders.IfNoneMatch] == hash) return@get call.respond(HttpStatusCode.NotModified)
                 call.response.header(HttpHeaders.ETag, hash)
                 call.respondBytes(bytes, contentType = ContentType.Image.PNG)
             }
             else
             {
-                if (call.request.headers[HttpHeaders.IfNoneMatch] == "default_avatar")
-                    return@get call.respond(HttpStatusCode.NotModified)
+                if (call.request.headers[HttpHeaders.IfNoneMatch] == "default_avatar") return@get call.respond(HttpStatusCode.NotModified)
                 call.response.header(HttpHeaders.ETag, "default_avatar")
                 call.respondText("""
                     <svg width="100" height="100" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
@@ -213,12 +205,8 @@ fun Route.userRoute()
 
             // Check if user is a member of this chat
             val chatMembers = getKoin().get<ChatMembers>()
-            val userChats = chatMembers.getUserChats(userAuth.id)
-            if (userChats.none { it.chatId == chatId })
-            {
-                call.respond(HttpStatusCode.Forbidden)
-                return@post
-            }
+            if (!chatMembers.isMember(chatId, userAuth.id))
+                return@post call.respond(HttpStatusCode.Forbidden)
 
             // Check if user is owner of group
             val chats = getKoin().get<Chats>()
@@ -280,7 +268,7 @@ fun Route.userRoute()
                     return@get call.respond(HttpStatusCode.NotModified)
                 call.response.header(HttpHeaders.ETag, "default_group_avatar")
                 call.respondText("""
-                    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <svg viewBox="-3 -3 30 30" xmlns="http://www.w3.org/2000/svg">
                         <path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z" fill="#42A5F5" />
                     </svg>
                 """.trimIndent(), contentType = ContentType.Image.SVG)

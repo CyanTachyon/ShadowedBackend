@@ -51,13 +51,14 @@ class Friends: SqlDao<Friends.FriendTable>(FriendTable)
 
         // Check if friendship already exists
         val existingFriend = selectAll().where { (table.userA eq userA) and (table.userB eq userB) }.singleOrNull()
-        if (existingFriend != null)
-        {
-            // Return the existing chat ID instead of null
-            return@query existingFriend[table.chat].value
-        }
+        if (existingFriend != null) return@query existingFriend[table.chat].value
 
-        val chatName = "Friend Chat ($userA, $userB)"
+        val userTable = get<Users>().table
+        val usernames = userTable.select(userTable.id, userTable.username)
+            .where { (userTable.id eq userA) or (userTable.id eq userB) }
+            .associate { it[userTable.id].value to it[userTable.username] }
+
+        val chatName = "Friend Chat (${usernames[userA]}, ${usernames[userB]})"
         val chat = chatTable.insertIgnoreAndGetId()
         {
             it[this.name] = chatName
@@ -95,7 +96,6 @@ class Friends: SqlDao<Friends.FriendTable>(FriendTable)
         (queryA + queryB).distinctBy { it.first }
     }
 
-    // ====== Friendship helpers ======
     /**
      * Check if the friendship exists between two users
      */
@@ -103,8 +103,13 @@ class Friends: SqlDao<Friends.FriendTable>(FriendTable)
     {
         val a = minOf(userAId, userBId)
         val b = maxOf(userAId, userBId)
-        table.selectAll().where { (table.userA eq a) and (table.userB eq b) }.any()
+        table.selectAll().where { (table.userA eq a) and (table.userB eq b) }.count() > 0
     }
 
-    // Note: moment viewer permissions are determined by membership in the owner's moment chat
+    suspend fun getFriendChat(userAId: UserId, userBId: UserId): ChatId? = query()
+    {
+        val a = minOf(userAId, userBId)
+        val b = maxOf(userAId, userBId)
+        table.selectAll().where { (table.userA eq a) and (table.userB eq b) }.singleOrNull()?.get(table.chat)?.value
+    }
 }

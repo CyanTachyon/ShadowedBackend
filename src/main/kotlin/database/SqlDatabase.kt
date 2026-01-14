@@ -23,6 +23,8 @@ import org.koin.dsl.module
 import java.sql.Driver
 import kotlin.reflect.KClass
 import kotlin.reflect.full.primaryConstructor
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.measureTime
 
 /**
  * @param T 表类型
@@ -30,11 +32,20 @@ import kotlin.reflect.full.primaryConstructor
  */
 abstract class SqlDao<T: Table>(table: T): KoinComponent
 {
-    protected suspend inline fun <R> query(crossinline block: suspend T.()->R) =
-        newSuspendedTransaction(Dispatchers.IO, database)
+    protected suspend inline fun <R> query(crossinline block: suspend T.()->R): R
+    {
+        val res: R
+        val time = measureTime()
         {
-            table.block()
+            res = newSuspendedTransaction(Dispatchers.IO, database)
+            {
+                table.block()
+            }
         }
+        if (time > 100.milliseconds)
+            ShadowedLogger.getLogger(this::class).warning("Slow database query: $time", Throwable())
+        return res
+    }
 
     protected val database: Database by inject()
     open fun Transaction.init() = Unit
@@ -62,7 +73,6 @@ object SqlDatabase: KoinComponent
     private lateinit var config: ApplicationConfig
     private val logger = ShadowedLogger.getLogger()
     private val drivers:List<Driver> = listOf(
-        org.sqlite.JDBC(),
         org.postgresql.Driver(),
     )
 

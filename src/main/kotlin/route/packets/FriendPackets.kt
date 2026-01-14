@@ -85,18 +85,14 @@ object AddFriendHandler : PacketHandler
         val chatMembers = getKoin().get<ChatMembers>()
         
         // Check if chat already exists
-        val existingMembership = chatMembers.getUserChats(loginUser.id)
-            .find { chat ->
-                chat.members.size == 2 &&
-                chat.members.any { it.name == targetUser.username }
-            }
+        val existingMembership = friends.getFriendChat(loginUser.id, targetUser.id)
         
         val chatId: ChatId
         val isExisting: Boolean
         
         if (existingMembership != null)
         {
-            chatId = existingMembership.chatId
+            chatId = existingMembership
             isExisting = true
         }
         else

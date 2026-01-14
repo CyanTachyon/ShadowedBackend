@@ -39,7 +39,6 @@ private val packetHandlers: Map<String, PacketHandler> = listOf(
     // Moment packets
     GetMomentsHandler,
     PostMomentHandler,
-    GetUserMomentsHandler,
     ToggleMomentPermissionHandler,
     GetMomentPermissionHandler,
     GetMyMomentKeyHandler,

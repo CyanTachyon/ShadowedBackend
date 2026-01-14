@@ -4,7 +4,7 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class ChatMember(
-    val id: Int,
+    val id: UserId,
     val name: String
 )
 
@@ -17,6 +17,6 @@ data class ChatFull(
     val isPrivate: Boolean,
     val unreadCount: Int,
     val doNotDisturb: Boolean,
-    val burnTime: Long?, // 阅后即焚时间（毫秒），null表示关闭
+    val burnTime: Long?,
     val otherUserIsDonor: Boolean,
 )

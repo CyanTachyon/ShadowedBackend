@@ -27,13 +27,21 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
     {
         val content = text("content")
         val type = enumerationByName<MessageType>("type", 20).default(MessageType.TEXT)
-        val time = timestamp("time").index()
+        val time = timestamp("time")
         val chat = reference("chat", Chats.ChatTable, onDelete = ReferenceOption.CASCADE, onUpdate = ReferenceOption.CASCADE).index()
         val sender = reference("sender", Users.UserTable, onDelete = ReferenceOption.SET_NULL, onUpdate = ReferenceOption.CASCADE).nullable().index()
         val replyTo = reference("reply_to", MessageTable, onDelete = ReferenceOption.SET_NULL, onUpdate = ReferenceOption.CASCADE).nullable().index()
         val readAt = timestamp("read_at").nullable().index().default(null)
         val burn = long("burn").nullable().index().default(null)
         val reactions = jsonb("reactions", dataJson, ListSerializer(Reaction.serializer())).nullable().default(null)
+    }
+
+    override fun Transaction.init()
+    {
+        // 优化getMessages查询速度
+        // 增加一个chat和time的索引，用于加速消息获取
+        // 覆盖索引，避免回表
+        exec("CREATE INDEX IF NOT EXISTS idx_messages_chat_time ON messages(chat, time DESC) INCLUDE (id, content, type, chat, sender, time, read_at, burn, reactions);")
     }
 
     suspend fun addChatMessage(
@@ -76,10 +84,9 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
 
     /**
      * Toggle a user's reaction on a message
-     * If the user has already reacted with this emoji, remove it
-     * If the user has reacted with a different emoji, replace it
-     * If the user hasn't reacted with any emoji, add this one
-
+     * If the user has already reacted with this emoji, remove it.
+     * If the user has reacted with a different emoji, replace it.
+     * If the user hasn't reacted with any emoji, add this one.
      */
     suspend fun toggleReaction(
         messageId: Long,
@@ -156,23 +163,28 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
     
     suspend fun getChatMessages(
         chatId: ChatId,
-        begin: Long,
+        before: Instant?,
         count: Int
     ): List<Message> = query()
     {
         val usersTable = users.table
         val replyTable = table.alias("reply_table")
         val replyUsersTable = users.table.alias("reply_users_table")
-
+ 
         table
             .leftJoin(usersTable, { this@Messages.table.sender }, { usersTable.id })
             .leftJoin(replyTable, { this@Messages.table.replyTo }, { replyTable[this@Messages.table.id] })
             .leftJoin(replyUsersTable, { replyTable[MessageTable.sender] }, { replyUsersTable[users.table.id] })
-            .selectAll()
+            .select(
+                table.id, table.content, table.type, table.chat, table.sender, table.time, table.readAt, table.burn, table.reactions,
+                usersTable.username, usersTable.donationAmount,
+                replyTable[MessageTable.id], replyTable[MessageTable.content], replyTable[MessageTable.type], replyTable[MessageTable.sender],
+                replyUsersTable[users.table.username]
+            )
             .where { table.chat eq chatId }
+            .apply { if (before != null) andWhere { table.time less before } }
             .orderBy(table.time to SortOrder.DESC)
             .limit(count)
-            .offset(start = begin)
             .map {
                 val replyInfo = it.getOrNull(replyTable[MessageTable.id])?.let()
                 { replyId ->
@@ -282,10 +294,11 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
      * Get all moment messages visible to a user using JOIN query
      * Joins chat_members -> chats (where is_moment=true) -> messages -> users (owner)
      * Only returns original moments (replyTo is null), not comments
+     * Uses 'before' parameter (timestamp) to get moments older than that time
      */
     suspend fun getMomentMessagesForUser(
         userId: UserId,
-        offset: Long,
+        before: Instant?,
         count: Int
     ): List<MomentMessage> = query()
     {
@@ -297,14 +310,16 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
             .innerJoin(chatsTable, { chatMembersTable.chat }, { chatsTable.id })
             .innerJoin(table, { chatsTable.id }, { table.chat })
             .innerJoin(usersTable, { chatsTable.owner }, { usersTable.id })
-            .selectAll()
+            .select(table.id, table.content, table.type, table.time, table.reactions,
+                chatsTable.owner, usersTable.username, usersTable.donationAmount,
+                chatMembersTable.key)
             .andWhere { chatMembersTable.user eq userId }
             .andWhere { chatsTable.isMoment eq true }
             .andWhere { table.replyTo.isNull() }
             .andWhere { table.sender eq chatsTable.owner }
+            .apply { if (before != null) andWhere { table.time less before } }
             .orderBy(table.time to SortOrder.DESC)
             .limit(count)
-            .offset(start = offset)
             .map {
                 MomentMessage(
                     messageId = it[table.id].value,
@@ -315,6 +330,54 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
                     time = it[table.time].toEpochMilliseconds(),
                     key = it[chatMembersTable.key],
                     ownerIsDonor = (it[usersTable.donationAmount] > 0),
+                    reactions = it[table.reactions] ?: emptyList()
+                )
+            }
+    }
+
+    /**
+     * Get all comments for a specific moment (messages that reply to the moment message)
+     */
+    suspend fun getMomentComments(momentMessageId: Long): List<Message> = query()
+    {
+        val usersTable = users.table
+        val replyTable = table.alias("reply_table")
+        val replyUsersTable = users.table.alias("reply_users_table")
+
+        table
+            .leftJoin(usersTable, { this@Messages.table.sender }, { usersTable.id })
+            .leftJoin(replyTable, { this@Messages.table.replyTo }, { replyTable[this@Messages.table.id] })
+            .leftJoin(replyUsersTable, { replyTable[MessageTable.sender] }, { replyUsersTable[users.table.id] })
+            .selectAll()
+            .where { table.replyTo eq momentMessageId }
+            .orderBy(table.time to SortOrder.ASC)
+            .map {
+                val replyInfo = it.getOrNull(replyTable[MessageTable.id])?.let()
+                { replyId ->
+                    val senderId = it[replyTable[MessageTable.sender]]?.value
+                    val senderName = it[replyUsersTable[users.table.username]]
+                    if (senderId == null) null
+                    else ReplyInfo(
+                        messageId = replyId.value,
+                        content = it[replyTable[MessageTable.content]],
+                        senderId = senderId,
+                        senderName = senderName,
+                        type = it[replyTable[MessageTable.type]]
+                    )
+                }
+
+                Message(
+                    id = it[table.id].value,
+                    content = it[table.content],
+                    type = it[table.type],
+                    chatId = it[table.chat].value,
+                    senderId = it[table.sender]?.value,
+                    senderName = it[usersTable.username],
+                    time = it[table.time].toEpochMilliseconds(),
+                    readAt = it[table.readAt]?.toEpochMilliseconds(),
+                    burn = it[table.burn],
+                    replyTo = replyInfo,
+                    senderIsDonor = (it.getOrNull(usersTable.donationAmount) ?: 0) > 0,
                     reactions = it[table.reactions] ?: emptyList()
                 )
             }
@@ -399,53 +462,5 @@ class Messages: SqlDao<Messages.MessageTable>(MessageTable)
             .select(table.id, table.type)
             .where { (table.chat eq chatId) and (table.type inList listOf(MessageType.IMAGE, MessageType.VIDEO, MessageType.FILE)) }
             .map { it[table.id].value }
-    }
-
-    /**
-     * Get all comments for a specific moment (messages that reply to the moment message)
-     */
-    suspend fun getMomentComments(momentMessageId: Long): List<Message> = query()
-    {
-        val usersTable = users.table
-        val replyTable = table.alias("reply_table")
-        val replyUsersTable = users.table.alias("reply_users_table")
-
-        table
-            .leftJoin(usersTable, { this@Messages.table.sender }, { usersTable.id })
-            .leftJoin(replyTable, { this@Messages.table.replyTo }, { replyTable[this@Messages.table.id] })
-            .leftJoin(replyUsersTable, { replyTable[MessageTable.sender] }, { replyUsersTable[users.table.id] })
-            .selectAll()
-            .where { table.replyTo eq momentMessageId }
-            .orderBy(table.time to SortOrder.ASC)
-            .map {
-                val replyInfo = it.getOrNull(replyTable[MessageTable.id])?.let()
-                { replyId ->
-                    val senderId = it[replyTable[MessageTable.sender]]?.value
-                    val senderName = it[replyUsersTable[users.table.username]]
-                    if (senderId == null) null
-                    else ReplyInfo(
-                        messageId = replyId.value,
-                        content = it[replyTable[MessageTable.content]],
-                        senderId = senderId,
-                        senderName = senderName,
-                        type = it[replyTable[MessageTable.type]]
-                    )
-                }
-
-                Message(
-                    id = it[table.id].value,
-                    content = it[table.content],
-                    type = it[table.type],
-                    chatId = it[table.chat].value,
-                    senderId = it[table.sender]?.value,
-                    senderName = it[usersTable.username],
-                    time = it[table.time].toEpochMilliseconds(),
-                    readAt = it[table.readAt]?.toEpochMilliseconds(),
-                    burn = it[table.burn],
-                    replyTo = replyInfo,
-                    senderIsDonor = (it.getOrNull(usersTable.donationAmount) ?: 0) > 0,
-                    reactions = it[table.reactions] ?: emptyList()
-                )
-            }
     }
 }

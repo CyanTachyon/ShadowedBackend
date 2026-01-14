@@ -10,7 +10,6 @@ import org.jetbrains.exposed.dao.id.CompositeIdTable
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.plus
-import org.koin.core.component.get
 import org.koin.core.component.inject
 
 class ChatMembers: SqlDao<ChatMembers.ChatMemberTable>(ChatMemberTable)
@@ -60,65 +59,47 @@ class ChatMembers: SqlDao<ChatMembers.ChatMemberTable>(ChatMemberTable)
 
     suspend fun getUserChats(userId: UserId): List<ChatFull> = query()
     {
-        val myMemberships = table.selectAll().where { table.user eq userId }.toList()
+        val res = (table innerJoin chats.table)
+            .select(table.chat, table.key, table.unread, table.doNotDisturb,
+                chats.table.name, chats.table.private, chats.table.burnTime, chats.table.lastChatAt)
+            .andWhere { table.user eq userId }
+            .andWhere { chats.table.isMoment eq false }
+            .toList()
+            .sortedByDescending { it[chats.table.lastChatAt] }
 
-        val chats = myMemberships.mapNotNull()
-        { row ->
-            val chatId = row[table.chat].value
-            val chatRow = chats.table.selectAll().where { chats.table.id eq chatId }.singleOrNull()
-            
-            // Filter out moment chats from regular chat list
-            val isMoment = chatRow?.get(chats.table.isMoment) ?: false
-            if (isMoment) return@mapNotNull null
-            
-            val isPrivate = chatRow?.get(chats.table.private) ?: false
-            val chatName = chatRow?.get(chats.table.name)
-            val burnTime = chatRow?.get(chats.table.burnTime)
-            val myKey = row[table.key]
-            val allMembersInfo = table.selectAll().where { table.chat eq chatId }
-                .map()
-                { mRow ->
-                    val uid = mRow[table.user].value
-                    val userRow = users.table.selectAll().where { users.table.id eq uid }.single()
-                    val uname = userRow[users.table.username]
-                    val isDonor = userRow[users.table.donationAmount] > 0
-                    Triple(uid, uname, isDonor)
-                }
+        val chatIds = res.map { it[table.chat].value }
+        val members = (table innerJoin users.table)
+            .select(users.table.id, users.table.username, table.chat, users.table.donationAmount)
+            .andWhere { table.chat inList chatIds }
+            .toList()
+            .groupBy { it[table.chat].value }
 
-            val members = allMembersInfo.map { (uid, uname, _) ->
-                ChatMember(
-                    id = uid.value,
-                    name = uname
-                )
-            }
-            val otherUserIsDonor = allMembersInfo.find { it.first != userId }?.third ?: false
-
-            // For private chats, use other person's name instead of chat name
-            val displayName = if (isPrivate && members.size == 2)
-            {
-                members.find { it.id != userId.value }?.name ?: chatName
-            }
-            else
-            {
-                chatName ?: members.joinToString(", ") { it.name }
-            }
-
+        res.map()
+        { chatRow ->
+            val isPrivate = chatRow[chats.table.private]
             ChatFull(
-                chatId = chatId,
-                name = displayName,
-                key = myKey,
-                members = members,
-                isPrivate = isPrivate,
-                unreadCount = row[table.unread],
-                doNotDisturb = row[table.doNotDisturb],
-                burnTime = burnTime,
-                otherUserIsDonor = otherUserIsDonor
+                chatId = chatRow[table.chat].value,
+                name =
+                    if (!isPrivate) chatRow[chats.table.name]
+                    else members[chatRow[table.chat].value]
+                        ?.firstOrNull { it[users.table.id].value != userId }
+                        ?.get(users.table.username)
+                        ?: "Private Chat",
+                key = chatRow[table.key],
+                members = members[chatRow[table.chat].value]?.map()
+                { memberRow ->
+                    ChatMember(
+                        id = memberRow[users.table.id].value,
+                        name = memberRow[users.table.username]
+                    )
+                } ?: emptyList(),
+                isPrivate = chatRow[chats.table.private],
+                unreadCount = chatRow[table.unread],
+                doNotDisturb = chatRow[table.doNotDisturb],
+                burnTime = chatRow[chats.table.burnTime],
+                otherUserIsDonor = isPrivate && members[chatRow[table.chat].value]?.any { it[users.table.id].value != userId && it[users.table.donationAmount] > 0 } == true
             )
         }
-        val chatTable =  get<Chats>().table
-        val times = chatTable.select(chatTable.id, chatTable.lastChatAt).where { chatTable.id inList chats.map { it.chatId } }
-            .associate { it[chatTable.id].value to it[chatTable.lastChatAt].toEpochMilliseconds() }
-        chats.sortedByDescending { times[it.chatId] ?: 0L }
     }
     
     suspend fun getMemberIds(chatId: ChatId): List<UserId> = query()
@@ -192,14 +173,12 @@ class ChatMembers: SqlDao<ChatMembers.ChatMemberTable>(ChatMemberTable)
         } > 0
     }
 
-    // ====== Moment-related methods ======
-
     /**
      * Check if user is a member of a chat
      */
     suspend fun isMember(chatId: ChatId, userId: UserId): Boolean = query()
     {
-        table.selectAll().where { (table.chat eq chatId) and (table.user eq userId) }.any()
+        table.selectAll().where { (table.chat eq chatId) and (table.user eq userId) }.count() > 0
     }
 
     /**

@@ -3,6 +3,7 @@ package moe.tachyon.shadowed.route.packets
 import io.ktor.server.websocket.*
 import io.ktor.websocket.*
 import kotlinx.datetime.Clock
+import kotlinx.datetime.Instant
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
 import moe.tachyon.shadowed.contentNegotiationJson
@@ -37,27 +38,27 @@ object GetChatsHandler: PacketHandler
 object GetMessagesHandler: PacketHandler
 {
     override val packetName = "get_messages"
-
+    
     override suspend fun handle(
         session: DefaultWebSocketServerSession,
         packetData: String,
         loginUser: User
     )
     {
-        val (chatId, begin, count) = runCatching()
+        val (chatId, before, count) = runCatching()
         {
             val json = contentNegotiationJson.parseToJsonElement(packetData)
             val cid = json.jsonObject["chatId"]!!.jsonPrimitive.int.let(::ChatId)
-            val start = json.jsonObject["begin"]!!.jsonPrimitive.long
+            val before = json.jsonObject["before"]?.jsonPrimitive?.longOrNull
             val limit = json.jsonObject["count"]!!.jsonPrimitive.int
-            Triple(cid, start, limit)
+            Triple(cid, before, limit)
         }.getOrNull() ?: return session.sendError("Get messages failed: Invalid packet format")
-
-        if (getKoin().get<ChatMembers>().getUserChats(loginUser.id).none { it.chatId == chatId })
+        
+        if (!getKoin().get<ChatMembers>().isMember(chatId, loginUser.id))
             return session.sendError("Get messages failed: You are not a member of this chat")
-
-        val msgs = getKoin().get<Messages>().getChatMessages(chatId, begin, count)
-        if (begin == 0L)
+        
+        val msgs = getKoin().get<Messages>().getChatMessages(chatId, before?.let(Instant::fromEpochMilliseconds), count)
+        if (before == null)
         {
             getKoin().get<ChatMembers>().resetUnread(chatId, loginUser.id)
             session.sendUnreadCount(loginUser.id, chatId)
@@ -106,14 +107,7 @@ object SendMessageHandler: PacketHandler
         }
 
         // For moment chats, check membership differently (moment chats are excluded from getUserChats)
-        val isMember = if (chat?.isMoment == true)
-        {
-            chatMembers.isMember(chatId, loginUser.id)
-        }
-        else
-        {
-            chatMembers.getUserChats(loginUser.id).any { it.chatId == chatId }
-        }
+        val isMember = chatMembers.isMember(chatId, loginUser.id)
 
         if (!isMember)
             return session.sendError("Send message failed: You are not a member of this chat")
@@ -280,7 +274,7 @@ object EditMessageHandler: PacketHandler
         if (originalMessage.senderId != loginUser.id)
             return session.sendError("Edit message failed: You can only edit your own messages")
 
-        if (chatMembers.getUserChats(loginUser.id).none { it.chatId == originalMessage.chatId })
+        if (!chatMembers.isMember(originalMessage.chatId, loginUser.id))
             return session.sendError("Edit message failed: You are not a member of this chat")
 
         // If deleting (newContent == null), also delete the associated file
