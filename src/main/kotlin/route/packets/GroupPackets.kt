@@ -74,8 +74,8 @@ object CreateGroupHandler : PacketHandler
         }
         
         session.sendSuccess("Group created successfully")
-        
-        for (user in memberUsers)
+
+        for (user in (memberUsers + loginUser).distinct())
             SessionManager.forEachSession(user.id) { s -> s.sendChatList(user.id) }
     }
 }

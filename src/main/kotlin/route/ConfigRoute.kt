@@ -10,16 +10,6 @@ import moe.tachyon.shadowed.contentNegotiationJson
 
 fun Route.configRoute()
 {
-    get("/config")
-    {
-        call.respond(
-            buildJsonObject()
-            {
-                put("checkingKey", environment.config.property("checkingKey").getString())
-            }
-        )
-    }
-
     get("/auth/params")
     {
         call.respond(
